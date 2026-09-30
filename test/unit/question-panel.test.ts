@@ -113,7 +113,7 @@ describe("question panel", () => {
             assert.match(text, /server/);
             assert.match(text, /2\. SQLite/);
             assert.match(text, /Type something/);
-            assert.match(text, /S skip/);
+            assert.match(text, /⇧S skip/);
             assert.match(text, /Esc close/);
         });
 
@@ -972,7 +972,7 @@ describe("question panel", () => {
             const footer = innerLines(panel).at(-1)!;
 
             assert.match(footer, /Esc back to options/);
-            assert.equal(footer.includes("S skip"), false, "the editor turns S into text");
+            assert.equal(footer.includes("⇧S skip"), false, "the editor turns S into text");
         });
 
         it("closes on Esc even when the deferred save throws", () => {

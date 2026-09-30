@@ -2,9 +2,9 @@
 
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**Structured questions for [Pi](https://pi.dev): the model asks, the panel opens, and the answers come back as a follow-up message.**
+**Structured questions for [Pi](https://pi.dev): the model asks, the panel opens, and your answer reaches it when you are ready.**
 
-`ask_user_questions` is for the decisions the model should not make on its own. The tool returns as soon as the panel is open, so the agent keeps working on what it is sure about and your answer resumes it later instead of blocking the turn.
+`ask_user_questions` is for the decisions the model should not make on its own. Asking is asynchronous: the question waits in the session while the model keeps working on everything that does not depend on it, and your answer - or a skip - arrives back as a message that resumes it. Read the panel, take your time, and answer when you get to it.
 
 <img src="docs/question-panel.png" alt="The question panel: two question tabs, the focused option's Markdown preview pane, numbered options and the free-form row" width="880">
 
@@ -16,21 +16,13 @@ Install from git:
 pi install git:github.com/Nouvelle-Lune/lune-ask-question
 ```
 
-Then start Pi normally:
-
-```bash
-pi
-```
-
-There is nothing to enter and no mode to switch: when the model needs a decision it calls `ask_user_questions`, and the panel opens over the session.
-
 ## What it does
 
-- **Opens the panel on arrival.** The overlay appears as soon as the tool call is made, so the question is answered while the model is still thinking rather than at the end of the turn.
-- **Answers as a follow-up message.** Answering or skipping sends one message back to the model (`triggerTurn`, delivered as a steer), rendered in the transcript as a `Questions answered` or `Questions skipped` row.
-- **Keeps unanswered questions reachable.** `Esc` closes the panel without settling anything, a dock below the editor says a question is still pending, and `/question` reopens the next one with its focus and written drafts intact.
-- **Survives a restart.** Pending questions and drafts are snapshotted into the session and restored from the active branch, so `/reload`, `/resume` and `/tree` switches do not lose a question.
-- **Compares options before answering.** An option's Markdown `preview` renders in a bordered pane beside the options - side by side on a wide terminal, stacked under them on a narrow one - and is never echoed into the answer.
+- **Asks without stopping the turn.** The panel opens over the session the moment a decision is needed, and the model carries on with the parts that do not depend on the answer instead of waiting for you.
+- **Brings the answer back into the session.** Answering or skipping adds a `Questions answered` or `Questions skipped` row to the transcript and resumes the model from there.
+- **A question waits as long as you need.** `Esc` closes the panel without settling anything: a dock below the editor says a question is still pending, and `/question` reopens it with the focused row and your drafts intact.
+- **Survives a restart.** A pending question and what you had written come back after `/reload`, `/resume` or `/tree`.
+- **Compares options before answering.** An option can carry a Markdown preview - a diff, a config block, a mockup - in a pane beside the options, side by side on a wide terminal and stacked under them on a narrow one. A preview is only for you: it never becomes the answer.
 - **Only as tall as its content.** A short question covers as little of the transcript as possible; a long one scrolls, with the tab strip pinned above the body.
 
 ## Panel
@@ -42,15 +34,15 @@ There is nothing to enter and no mode to switch: when the model needs a decision
 | `Space` | Toggle the focused option in a multi-select question |
 | `1`–`9` | Pick an option by number |
 | `Tab`, `⇧Tab`, `←` `→` | Switch question tabs and the `✓ Submit` tab |
-| Any printable key except `S` on `Type something` | Open the answer editor with that key |
+| Any printable key except `⇧S` on `Type something` | Open the answer editor with that key |
 | `Enter` in the editor | Submit the written answer |
 | `Esc` in the editor | Back to the options, keeping the draft |
 | `Esc` | Close the panel and leave the request pending |
-| `S` | Skip the whole request; inside the editor `S` is text, so leave it with `Esc` first |
+| `⇧S` | Skip the whole request; inside the editor `S` is text, so leave it with `Esc` first |
 
 A single-question request submits on the option press. Several questions walk through their tabs and meet on the `✓ Submit` tab, and submitting with a gap jumps to the first unanswered question instead of doing nothing.
 
-Skip is `Shift+S` so that a plain `s` stays available as the first letter of an answer, and it is the one shortcut the editor does not take over: on a `Type something` row, an answer that starts with a capital `S` starts with `Enter` instead.
+Skip is `Shift+S`, so a plain `s` stays available as the first letter of an answer; on a `Type something` row, an answer that starts with a capital `S` starts with `Enter` instead.
 
 Answers land in the transcript and resume the model:
 
@@ -62,26 +54,7 @@ Answers land in the transcript and resume the model:
 
 <img src="docs/question-dock.png" alt="The below-editor dock: 1 pending question, the next question and the /question hint" width="880">
 
-The panel picks the least recently shown pending request, so a question that just arrived surfaces immediately while a request that was only deferred waits its turn. A request that arrives while a panel is open does not need `/question`: answering the current one hands the panel over to the next.
-
-## Agent-facing tool
-
-`ask_user_questions` is model-only and runs sequentially, so two calls cannot mutate the shared panel at once.
-
-| Field | |
-| --- | --- |
-| `questions[].question` | A single-sentence, atomic decision prompt |
-| `questions[].header` | Short subject label (`Storage`, `Auth`, `Timeouts`) shown as the tab label |
-| `questions[].displayText` | Optional Markdown shared by every option: the context or evidence the whole question needs, such as a diff, an excerpt or the current values |
-| `questions[].options[]` | Two to four mutually distinct choices; omit the field for free-form input |
-| `questions[].options[].label` | Short choice label; put the preferred option first with `(Recommended)` |
-| `questions[].options[].description` | One sentence on the consequence or tradeoff |
-| `questions[].options[].preview` | Optional Markdown artifact of this option, shown in the pane beside the options while it is focused; roughly a dozen lines |
-| `questions[].multiSelect` | Whether several options can apply together |
-
-At most four questions per request, and the model is told to ask the smallest set that unblocks it: inspect first, use a reasonable default for low-impact choices, and only stop when progress depends on the answer.
-
-Outside the interactive TUI the tool does not wait for an answer that can never arrive; it reports that the question must be asked in plain text instead.
+A question that just arrived surfaces immediately, while one you only deferred waits its turn. A request that arrives while a panel is open does not need `/question`: answering the current one hands the panel over to the next.
 
 ## Development
 
@@ -89,17 +62,11 @@ Outside the interactive TUI the tool does not wait for an answer that can never 
 npm install
 npm test
 npm run typecheck
-npm run tui:demo          # real pi TUI, scripted model, one question
+npm run tui:demo                # real pi TUI, scripted model, one question
 LAQ_DEMO=two npm run tui:demo   # queue a second request to watch the handover
 LAQ_DEMO=multi npm run tui:demo # one request with three questions, to watch the tabs
-npm run docs:images       # regenerate docs/*.svg + docs/*.png (needs rsvg-convert)
+npm run docs:images             # regenerate docs/*.svg + docs/*.png (needs rsvg-convert)
 ```
-
-`npm test` runs unit tests plus integration tests that drive `src/index.ts` through a fake pi host: the host API the extension calls, not a real Pi `AgentSession`. `npm run tui:demo` is the only check that runs the extension inside a real pi process.
-
-`docs:images` renders the README screenshots from the real panel, dock and answer-row components against Pi's dark theme palette, so a UI change is one command away from an up-to-date image.
-
-`@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui` and `typebox` are supplied by the Pi host at runtime, so the package declares them as `peerDependencies` with the `"*"` range Pi requires and never bundles them. They are repeated in `devDependencies` so local typecheck and tests resolve the same modules Pi injects; the extension is tested against Pi 0.99.1.
 
 ## License
 

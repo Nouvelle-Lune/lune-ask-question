@@ -728,11 +728,11 @@ export class QuestionPanel implements Component, Focusable {
             // advertise skip here; Esc leaves the editor and skips from the options.
             hints = "Enter submit · Esc back to options";
         } else if (this.isSubmitTab) {
-            hints = `${this.isMultiQuestion ? "Tab/←→ switch · " : ""}Enter submit · S skip · Esc close`;
+            hints = `${this.isMultiQuestion ? "Tab/←→ switch · " : ""}Enter submit · ⇧S skip · Esc close`;
         } else if (question?.multiSelect === true) {
-            hints = "↑↓ move · Space/Enter toggle · Tab next · S skip · Esc close";
+            hints = "↑↓ move · Space/Enter toggle · Tab next · ⇧S skip · Esc close";
         } else {
-            hints = `↑↓ select · Enter confirm${this.isMultiQuestion ? " · Tab/←→ switch" : ""} · S skip · Esc close`;
+            hints = `↑↓ select · Enter confirm${this.isMultiQuestion ? " · Tab/←→ switch" : ""} · ⇧S skip · Esc close`;
         }
 
         return this.cell(this.theme.fg("dim", hints), width);
