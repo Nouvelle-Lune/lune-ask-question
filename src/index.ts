@@ -29,16 +29,27 @@ export default function (pi: ExtensionAPI): void {
         // duplicate subscription would render and persist twice per event.
         unsubscribeManager?.();
 
-        unsubscribeManager = questionManager.subscribe((event) => {
-            // `requests-cleared` is the session-boundary reset, not a state change; writing
-            // an empty snapshot there would shadow the pending questions of the branch
-            // being restored.
-            if (event.type !== "requests-cleared") {
-                persist();
-            }
-
-            questionDock.render();
-        });
+        unsubscribeManager = questionManager.subscribe(
+            (event) => {
+                try {
+                    // `requests-cleared` is the session-boundary reset, not a state change;
+                    // writing an empty snapshot there would shadow the pending questions of
+                    // the branch being restored.
+                    if (event.type !== "requests-cleared") {
+                        persist();
+                    }
+                } finally {
+                    // A snapshot that failed must not also leave the dock showing stale order.
+                    questionDock.render();
+                }
+            },
+            (error) => {
+                ctx.ui.notify(
+                    `Question state could not be saved: ${error instanceof Error ? error.message : String(error)}`,
+                    "error",
+                );
+            },
+        );
 
         // Registered after the persist listener: the snapshot has to exist before the
         // answer message resumes the model.
@@ -71,6 +82,9 @@ export default function (pi: ExtensionAPI): void {
     });
 
     pi.on("session_tree", (_event, ctx) => {
+        // The branch changed under the overlay, so a panel that is still up belongs to the
+        // branch being left; the reset stops it from continuing into this one.
+        resetQuestionPanelState();
         questionManager.clearAll();
         questionManager.restore(ctx);
         questionDock.render();

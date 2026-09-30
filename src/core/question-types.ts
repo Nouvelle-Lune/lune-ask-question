@@ -28,6 +28,18 @@ export interface AskQuestion {
     multiSelect?: boolean;
 }
 
+/**
+ * The question fields an answer row, a tab label or a model-facing answer reads.
+ *
+ * `displayText` and `option.preview` are panel display input: copying them into the delivered
+ * message would keep every preview in the transcript for good.
+ */
+export interface AnswerMessageQuestion {
+    header?: string;
+    question: string;
+    options?: Array<{ label: string }>;
+}
+
 /** One answered question: either option indexes or the custom text the user wrote. */
 export interface AskQuestionAnswer {
     selectedIndexes: number[];
@@ -68,5 +80,9 @@ export interface AskQuestionRequest {
 }
 
 export interface AskQuestionStateSnapshot {
+    version: typeof QUESTION_STATE_VERSION;
     requests: AskQuestionRequest[];
 }
+
+/** Bumped when the persisted request shape changes; a snapshot from another version is not read. */
+export const QUESTION_STATE_VERSION = 1;

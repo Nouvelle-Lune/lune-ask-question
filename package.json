@@ -20,7 +20,8 @@
     "test": "node --experimental-strip-types --test 'test/**/*.test.ts'",
     "typecheck": "tsc --noEmit",
     "tui:demo": "node --experimental-strip-types test/tui/launch.ts",
-    "docs:images": "node --experimental-strip-types tools/make-doc-images.mjs"
+    "docs:images": "node --experimental-strip-types tools/make-doc-images.mjs",
+    "prepublishOnly": "npm run typecheck && npm test"
   },
   "keywords": [
     "pi-package",
@@ -43,9 +44,9 @@
     "node": ">=22.19.0"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*",
-    "typebox": "*"
+    "@earendil-works/pi-coding-agent": "^0.99.1",
+    "@earendil-works/pi-tui": "^0.99.1",
+    "typebox": "^1.3.27"
   },
   "peerDependenciesMeta": {
     "@earendil-works/pi-coding-agent": {

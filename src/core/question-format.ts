@@ -1,7 +1,7 @@
 import { stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 import type {
-    AskQuestion,
+    AnswerMessageQuestion,
     AskQuestionAnswer,
     AskQuestionRequest,
 } from "./questionManager.ts";
@@ -16,7 +16,7 @@ export const TAB_LABEL_MAX_WIDTH = 16;
  * and a generated "Q1" would carry no information the user can use, so the tool schema requires
  * a header instead. The width cut is only a guard: a CJK header is wider than its code units.
  */
-export function questionTabLabel(question: AskQuestion): string {
+export function questionTabLabel(question: AnswerMessageQuestion): string {
     return truncateToWidth(question.header?.trim() ?? "", TAB_LABEL_MAX_WIDTH, "…");
 }
 
@@ -26,7 +26,7 @@ export function questionTabLabel(question: AskQuestion): string {
  * Callers show the question text after this, so falling back to the question text here would
  * print the same sentence twice.
  */
-export function questionHeaderPrefix(question: AskQuestion): string {
+export function questionHeaderPrefix(question: AnswerMessageQuestion): string {
     const label = questionTabLabel(question);
 
     return label.length === 0 ? "" : `${label}: `;
@@ -50,7 +50,7 @@ export function summarizeText(text: string, maxWidth: number): string {
 }
 
 /** Numbered label of one option as the panel shows it: `2. Name`. */
-export function optionLabel(question: AskQuestion, index: number): string {
+export function optionLabel(question: AnswerMessageQuestion, index: number): string {
     const label = question.options?.[index]?.label ?? `option ${index + 1}`;
 
     return `${index + 1}. ${label}`;
@@ -58,7 +58,7 @@ export function optionLabel(question: AskQuestion, index: number): string {
 
 /** Model-facing summary of one answer; undefined while the question is unanswered. */
 export function formatAnswer(
-    question: AskQuestion,
+    question: AnswerMessageQuestion,
     answer: AskQuestionAnswer | undefined,
 ): string | undefined {
     if (!answer) {
@@ -95,12 +95,15 @@ export function formatAnswerMessage(request: AskQuestionRequest): string {
     return lines.join("\n").trimEnd();
 }
 
-/** Model-facing text of the tool result, which returns before any answer exists. */
-export function formatPendingMessage(request: AskQuestionRequest): string {
+/**
+ * Model-facing text of the tool result, which returns before any answer exists.
+ *
+ * The questions are left out on purpose: they are the tool call's own arguments, and the
+ * request id is nothing the model can act on - neither belongs in the context twice.
+ */
+export function formatPendingMessage(): string {
     return [
-        `Asked the user ${request.questions.length} question${request.questions.length === 1 ? "" : "s"}; the interactive panel is open (request ${request.id}).`,
-        "The answers will arrive as a follow-up message. Continue with work that does not depend on them, then end your turn to wait.",
-        "",
-        ...request.questions.map((question) => question.question),
+        "Questions are pending. Continue any independent work.",
+        "The user's answers will arrive as a follow-up message.",
     ].join("\n");
 }

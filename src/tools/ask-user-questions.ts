@@ -70,7 +70,7 @@ export function askUserQuestions(persist: () => void) {
                 content: [
                     {
                         type: "text" as const,
-                        text: formatPendingMessage(request),
+                        text: formatPendingMessage(),
                     },
                 ],
                 details: {

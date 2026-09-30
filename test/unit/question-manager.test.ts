@@ -3,6 +3,7 @@ import { beforeEach, describe, it } from "node:test";
 
 import {
     QUESTION_STATE_ENTRY,
+    QUESTION_STATE_VERSION,
     QuestionManager,
     questionManager,
     type AskQuestion,
@@ -194,6 +195,18 @@ describe("question manager", () => {
             assert.equal(manager.get(request.id)?.shownSeq, undefined);
         });
 
+        it("emits a shown event so every ordering reader sees the move", () => {
+            const manager = newManager();
+            const request = manager.create(QUESTIONS);
+            const events: QuestionManagerEvent[] = [];
+            manager.subscribe((event) => events.push(event));
+
+            manager.markShown(request.id);
+            manager.markShown("missing");
+
+            assert.deepEqual(events, [{ type: "request-shown", id: request.id }]);
+        });
+
         it("keeps the showing order across a restore", () => {
             const manager = newManager();
             const first = manager.create(QUESTIONS);
@@ -227,7 +240,8 @@ describe("question manager", () => {
             assert.equal(host.appendEntryCalls.length, 1);
             assert.equal(host.appendEntryCalls[0]!.customType, QUESTION_STATE_ENTRY);
 
-            const snapshot = host.appendEntryCalls[0]!.data as { requests: Array<{ id: string }> };
+            const snapshot = host.appendEntryCalls[0]!.data as { version: number; requests: Array<{ id: string }> };
+            assert.equal(snapshot.version, QUESTION_STATE_VERSION, "the snapshot carries the format it was written in");
             assert.deepEqual(snapshot.requests.map((request) => request.id), [pending.id]);
         });
 
@@ -282,6 +296,7 @@ describe("question manager", () => {
             const request = manager.create(QUESTIONS);
 
             const branch = branchWith({
+                version: QUESTION_STATE_VERSION,
                 requests: [{
                     ...request,
                     draft: { currentIndex: 99, optionIndex: -3, answers: "broken", customDrafts: null },
@@ -305,8 +320,8 @@ describe("question manager", () => {
             const latest = manager.create([{ question: "Latest" }]);
 
             const branch: FakeBranchEntry[] = [
-                { type: "custom", customType: QUESTION_STATE_ENTRY, data: { requests: [stale] } },
-                { type: "custom", customType: QUESTION_STATE_ENTRY, data: { requests: [latest] } },
+                { type: "custom", customType: QUESTION_STATE_ENTRY, data: { version: QUESTION_STATE_VERSION, requests: [stale] } },
+                { type: "custom", customType: QUESTION_STATE_ENTRY, data: { version: QUESTION_STATE_VERSION, requests: [latest] } },
             ];
 
             const restarted = newManager();
@@ -324,11 +339,25 @@ describe("question manager", () => {
             manager.restore(createFakeContext({
                 branch: [
                     { type: "custom", customType: "something-else", data: { requests: [{ id: "x", questions: [] }] } },
-                    { type: "custom", customType: QUESTION_STATE_ENTRY, data: { requests: "broken" } },
+                    { type: "custom", customType: QUESTION_STATE_ENTRY, data: { version: QUESTION_STATE_VERSION, requests: "broken" } },
                 ],
             }));
 
             assert.deepEqual(manager.getPendingRequests(), []);
+        });
+
+        it("ignores a snapshot written by another format version", () => {
+            const request = newManager().create(QUESTIONS);
+
+            const branch: FakeBranchEntry[] = [
+                { type: "custom", customType: QUESTION_STATE_ENTRY, data: { requests: [request] } },
+                { type: "custom", customType: QUESTION_STATE_ENTRY, data: { version: QUESTION_STATE_VERSION + 1, requests: [request] } },
+            ];
+
+            const restarted = newManager();
+            restarted.restore(createFakeContext({ branch }));
+
+            assert.deepEqual(restarted.getPendingRequests(), [], "a version this build cannot read is not guessed at");
         });
 
         it("does not replace a live request with the same id", () => {
@@ -336,7 +365,10 @@ describe("question manager", () => {
             const request = manager.create(QUESTIONS);
             request.draft.answers[0] = { selectedIndexes: [0] };
 
-            const branch = branchWith({ requests: [{ ...request, draft: { ...request.draft, answers: [undefined, undefined] } }] });
+            const branch = branchWith({
+                version: QUESTION_STATE_VERSION,
+                requests: [{ ...request, draft: { ...request.draft, answers: [undefined, undefined] } }],
+            });
 
             manager.restore(createFakeContext({ branch }));
 
@@ -352,6 +384,48 @@ describe("question manager", () => {
 
             assert.deepEqual(manager.getPendingRequests(), []);
             assert.equal(manager.get(request.id), undefined);
+        });
+    });
+
+    describe("listener errors", () => {
+        it("reports a failing listener and keeps the others running", () => {
+            const manager = newManager();
+            const reported: Array<{ error: unknown; event: QuestionManagerEvent }> = [];
+            const seen: QuestionManagerEvent[] = [];
+
+            manager.subscribe(
+                () => {
+                    throw new Error("snapshot failed");
+                },
+                (error, event) => reported.push({ error, event }),
+            );
+            manager.subscribe((event) => seen.push(event));
+
+            const request = manager.create([{ question: "First" }]);
+
+            assert.equal(reported.length, 1, "the failure is not silent");
+            assert.equal((reported[0]!.error as Error).message, "snapshot failed");
+            assert.deepEqual(reported[0]!.event, { type: "request-created", id: request.id });
+            assert.deepEqual(seen, [{ type: "request-created", id: request.id }], "a later listener still runs");
+        });
+
+        it("keeps going when the reporter itself throws", () => {
+            const manager = newManager();
+            const seen: QuestionManagerEvent[] = [];
+
+            manager.subscribe(
+                () => {
+                    throw new Error("snapshot failed");
+                },
+                () => {
+                    throw new Error("notify failed");
+                },
+            );
+            manager.subscribe((event) => seen.push(event));
+
+            const request = manager.create([{ question: "First" }]);
+
+            assert.deepEqual(seen, [{ type: "request-created", id: request.id }]);
         });
     });
 });

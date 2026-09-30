@@ -5,6 +5,7 @@ import type {
     ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 
+import { QUESTION_STATE_VERSION } from "./question-types.ts";
 import type {
     AskQuestion,
     AskQuestionAnswer,
@@ -13,7 +14,10 @@ import type {
     AskQuestionStateSnapshot,
 } from "./question-types.ts";
 
+export { QUESTION_STATE_VERSION } from "./question-types.ts";
+
 export type {
+    AnswerMessageQuestion,
     AskQuestion,
     AskQuestionAnswer,
     AskQuestionDraft,
@@ -34,16 +38,18 @@ export const QUESTION_STATE_ENTRY = "lune-ask-question-state";
 
 export type QuestionManagerEvent =
     | { type: "request-created"; id: string }
+    | { type: "request-shown"; id: string }
     | { type: "request-answered"; id: string }
     | { type: "request-skipped"; id: string }
     | { type: "requests-restored" }
     | { type: "requests-cleared" };
 
 export type QuestionManagerListener = (event: QuestionManagerEvent) => void;
+export type QuestionManagerListenerErrorHandler = (error: unknown, event: QuestionManagerEvent) => void;
 
 export class QuestionManager {
     private readonly requests = new Map<string, AskQuestionRequest>();
-    private readonly listeners = new Set<QuestionManagerListener>();
+    private readonly listeners = new Map<QuestionManagerListener, QuestionManagerListenerErrorHandler | undefined>();
     private shownSeqCounter = 0;
 
     create(questions: readonly AskQuestion[]): AskQuestionRequest {
@@ -92,12 +98,18 @@ export class QuestionManager {
         return next;
     }
 
-    /** Record that the panel is showing `id`, which moves it behind the requests it passed. */
+    /**
+     * Record that the panel is showing `id`, which moves it behind the requests it passed.
+     *
+     * The event is what keeps every ordering reader in step: the dock names the request this
+     * moved to the front, and the new `shownSeq` reaches the next snapshot with it.
+     */
     markShown(id: string): void {
         const request = this.getPendingRequest(id);
 
         if (request) {
             request.shownSeq = ++this.shownSeqCounter;
+            this.emit({ type: "request-shown", id });
         }
     }
 
@@ -161,6 +173,7 @@ export class QuestionManager {
 
     snapshot(): AskQuestionStateSnapshot {
         return {
+            version: QUESTION_STATE_VERSION,
             requests: this.getPendingRequests().map((request) => structuredClone(request)),
         };
     }
@@ -176,18 +189,23 @@ export class QuestionManager {
                 continue;
             }
 
-            const snapshot = entry.data as AskQuestionStateSnapshot | undefined;
+            const snapshot = entry.data as Partial<AskQuestionStateSnapshot> | undefined;
 
-            if (snapshot && Array.isArray(snapshot.requests)) {
-                this.restoreSnapshot(snapshot);
+            if (snapshot?.version === QUESTION_STATE_VERSION && Array.isArray(snapshot.requests)) {
+                this.restoreSnapshot(snapshot as AskQuestionStateSnapshot);
             }
 
             return;
         }
     }
 
-    subscribe(listener: QuestionManagerListener): () => void {
-        this.listeners.add(listener);
+    /**
+     * `onError` reports a listener that threw. Passing one is what keeps a failure visible:
+     * the listener that writes the snapshot is also the one whose failure would silently
+     * lose it, and the others must keep running either way.
+     */
+    subscribe(listener: QuestionManagerListener, onError?: QuestionManagerListenerErrorHandler): () => void {
+        this.listeners.set(listener, onError);
 
         return () => {
             this.listeners.delete(listener);
@@ -215,12 +233,27 @@ export class QuestionManager {
     }
 
     private emit(event: QuestionManagerEvent): void {
-        for (const listener of this.listeners) {
+        for (const [listener, onError] of this.listeners) {
             try {
                 listener(event);
             } catch (error) {
-                // Ignore listener errors so one failing listener cannot break the others.
+                // One failing listener cannot break the others, but its failure is reported
+                // rather than hidden: it may be the one that persists the snapshot.
+                this.reportListenerError(onError, error, event);
             }
+        }
+    }
+
+    private reportListenerError(
+        onError: QuestionManagerListenerErrorHandler | undefined,
+        error: unknown,
+        event: QuestionManagerEvent,
+    ): void {
+        try {
+            onError?.(error, event);
+        } catch {
+            // The reporter is the last line of defence; its own failure must not surface as a
+            // broken emit either.
         }
     }
 }

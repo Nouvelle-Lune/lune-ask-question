@@ -76,15 +76,25 @@ export interface OpenQuestionPanelOptions {
  */
 export type PanelCloseReason = "settled" | "deferred";
 
-/** Guards against two overlays when a second request arrives while one is already open. */
-let panelOpen = false;
+/**
+ * Ownership of the single overlay.
+ *
+ * A panel is a long-lived async operation and a session boundary resets module state, so a
+ * flag is not enough: a panel that resolves after the reset would clear the ownership of the
+ * panel that replaced it. The generation is bumped on every reset, and the owner symbol
+ * identifies one invocation, so a stale continuation can neither release nor continue the
+ * new panel.
+ */
+let panelGeneration = 0;
+let panelOwner: symbol | undefined;
 
 /**
  * A session boundary disposes overlays without resolving their custom() promise in some
- * cases, so the flag must not survive into the next session and block `/question`.
+ * cases, so the ownership must not survive into the next session and block `/question`.
  */
 export function resetQuestionPanelState(): void {
-    panelOpen = false;
+    panelGeneration++;
+    panelOwner = undefined;
 }
 
 /**
@@ -104,11 +114,14 @@ export async function openQuestionPanel(
     ctx: ExtensionContext,
     options: OpenQuestionPanelOptions = {},
 ): Promise<void> {
-    if (ctx.mode !== "tui" || panelOpen) {
+    if (ctx.mode !== "tui" || panelOwner !== undefined) {
         return;
     }
 
-    panelOpen = true;
+    const generation = panelGeneration;
+    const owner = Symbol("question-panel");
+
+    panelOwner = owner;
 
     try {
         let reason: PanelCloseReason | undefined;
@@ -125,9 +138,17 @@ export async function openQuestionPanel(
             questionManager.markShown(request.id);
 
             reason = await showQuestionPanel(ctx, request, options);
+
+            // The session may have been replaced while the overlay was up; that session owns
+            // its own panel now, and this one must not continue into its queue.
+            if (panelGeneration !== generation || panelOwner !== owner) {
+                return;
+            }
         } while (reason === "settled" && questionManager.getPendingRequests().length > 0);
     } finally {
-        panelOpen = false;
+        if (panelGeneration === generation && panelOwner === owner) {
+            panelOwner = undefined;
+        }
     }
 }
 
@@ -251,16 +272,18 @@ export class QuestionPanel implements Component, Focusable {
             return;
         }
 
-        // The custom row is where answers are written, so printable keys start the editor
-        // there instead of being eaten by the single-key shortcuts below (s, digits, space,
-        // j/k). Those keep working on the option rows and on the submit tab.
-        if (isTypedCharacter(data) && this.isCustomRowFocused()) {
-            this.enterInputMode(data);
+        // Skip is checked before the custom-row shortcut so a free-form question, whose
+        // editor opens by itself, stays skippable: Esc leaves the editor, then `s` skips.
+        if (data === "s") {
+            this.skipRequest();
             return;
         }
 
-        if (data === "s") {
-            this.skipRequest();
+        // The custom row is where answers are written, so printable keys start the editor
+        // there instead of being eaten by the single-key shortcuts below (digits, space,
+        // j/k), which keep working on the option rows and on the submit tab.
+        if (isTypedCharacter(data) && this.isCustomRowFocused()) {
+            this.enterInputMode(data);
             return;
         }
 
@@ -559,7 +582,9 @@ export class QuestionPanel implements Component, Focusable {
     }
 
     private captureEditorDraft(): void {
-        const text = this.editor.getText();
+        // A large paste lives behind a `[paste #1 +12 lines]` marker in the editor; only
+        // getExpandedText() returns the content that has to survive Esc and a restart.
+        const text = this.editor.getExpandedText();
 
         this.draft.customDrafts[this.draft.currentIndex] = text.length > 0 ? text : undefined;
     }
@@ -690,7 +715,9 @@ export class QuestionPanel implements Component, Focusable {
         let hints: string;
 
         if (this.inputMode) {
-            hints = "Enter submit · Esc back to options · s skip the questions";
+            // `s` belongs to the editor while it owns the keys, so the footer must not
+            // advertise skip here; Esc leaves the editor and skips from the options.
+            hints = "Enter submit · Esc back to options";
         } else if (this.isSubmitTab) {
             hints = `${this.isMultiQuestion ? "Tab/←→ switch · " : ""}Enter submit · s skip · Esc close`;
         } else if (question?.multiSelect === true) {

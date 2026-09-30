@@ -46,7 +46,7 @@ There is nothing to enter and no mode to switch: when the model needs a decision
 | `Enter` in the editor | Submit the written answer |
 | `Esc` in the editor | Back to the options, keeping the draft |
 | `Esc` | Close the panel and leave the request pending |
-| `s` | Skip the whole request |
+| `s` | Skip the whole request; the answer editor keeps `s` as text, so leave it with `Esc` first |
 
 A single-question request submits on the option press. Several questions walk through their tabs and meet on the `✓ Submit` tab, and submitting with a gap jumps to the first unanswered question instead of doing nothing.
 
@@ -95,7 +95,7 @@ npm run docs:images       # regenerate docs/*.svg + docs/*.png (needs rsvg-conve
 
 `docs:images` renders the README screenshots from the real panel, dock and answer-row components against Pi's dark theme palette, so a UI change is one command away from an up-to-date image.
 
-`@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui` and `typebox` are supplied by the Pi host at runtime, so the package declares them as `peerDependencies` with a `"*"` range and never bundles them. They are repeated in `devDependencies` so local typecheck and tests resolve the same modules Pi injects.
+`@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui` and `typebox` are supplied by the Pi host at runtime, so the package declares them as `peerDependencies` and never bundles them. The Pi packages declare the `0.99.x` range the extension is verified against, so a future API break has to be a deliberate upgrade rather than a silently assumed one. They are repeated in `devDependencies` so local typecheck and tests resolve the same modules Pi injects.
 
 ## License
 

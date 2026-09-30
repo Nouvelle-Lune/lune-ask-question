@@ -47,6 +47,8 @@ export interface AppendEntryCall {
 
 export interface CustomCall {
     overlay: boolean | undefined;
+    /** Resolves this overlay's `custom()` promise, as pi does when the interaction closes. */
+    close: (result?: unknown) => void;
 }
 
 /** One entry of the fake session branch; `restore` reads these. */
@@ -148,12 +150,12 @@ export function createFakeUi(): FakeUi {
         },
 
         custom(factory, options) {
-            customCalls.push({ overlay: options?.overlay });
-
             let resolve!: (result: unknown) => void;
             const promise = new Promise<unknown>((res) => {
                 resolve = res;
             });
+
+            customCalls.push({ overlay: options?.overlay, close: (result) => resolve(result) });
 
             panel = factory(createFakeTui(), createFakeTheme(), createFakeKeybindings(), resolve);
             panelClosed = promise.then(() => undefined);
@@ -289,10 +291,16 @@ export function createFakePiHost(
     };
 }
 
-/** Tool definition with opaque schema types, matching the harness' untyped access. */
+/**
+ * Tool definition with opaque schema types, matching the harness' untyped access.
+ *
+ * `execute` is called directly, so this harness does not run pi's argument validation;
+ * `test/unit/tool-schema.test.ts` covers the schema against the real validator.
+ */
 export interface AnyToolDefinition {
     name: string;
     description: string;
+    parameters?: unknown;
     details?: unknown;
     execute(
         toolCallId: string,

@@ -13,7 +13,7 @@ import { beforeEach, describe, it } from "node:test";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 
 import luneAskQuestion from "../../src/index.ts";
-import { QUESTION_STATE_ENTRY, questionManager, type AskQuestion } from "../../src/core/questionManager.ts";
+import { QUESTION_STATE_ENTRY, QUESTION_STATE_VERSION, questionManager, type AskQuestion } from "../../src/core/questionManager.ts";
 import { ASK_QUESTION_ANSWER_MESSAGE } from "../../src/core/question-notification.ts";
 import { resetQuestionPanelState } from "../../src/tui/question-panel.ts";
 import {
@@ -140,14 +140,19 @@ describe("lune-ask-question extension", () => {
 
             const result = await tool.execute("call-1", { questions: QUESTIONS }, undefined, undefined, ctx);
 
+            const requestId = questionManager.getPendingRequests()[0]!.id;
+            const pendingText = String(result.content[0]?.type === "text" ? result.content[0].text : "");
+
             assert.equal(result.isError, undefined);
-            assert.deepEqual(result.details, { status: "pending", requestId: questionManager.getPendingRequests()[0]!.id });
-            assert.match(String(result.content[0]?.type === "text" ? result.content[0].text : ""), /Which database\?/);
+            assert.deepEqual(result.details, { status: "pending", requestId });
+            assert.match(pendingText, /Questions are pending/);
+            assert.match(pendingText, /follow-up message/);
             assert.equal(
-                String(result.content[0]?.type === "text" ? result.content[0].text : "").includes("Q1"),
+                pendingText.includes("Which database?"),
                 false,
-                "the tool result must not invent a question number",
+                "the questions are already in the tool call arguments",
             );
+            assert.equal(pendingText.includes(requestId), false, "the request id is not model-facing");
             assert.equal(ui.customCalls.length, 1);
             assert.equal(ui.customCalls[0]!.overlay, true);
             assert.equal(questionManager.getPendingRequests().length, 1);
@@ -165,8 +170,11 @@ describe("lune-ask-question extension", () => {
             await tool.execute("call-1", { questions: QUESTIONS }, undefined, undefined, ctx);
 
             const persisted = host.appendEntryCalls.filter((call) => call.customType === QUESTION_STATE_ENTRY);
-            assert.equal(persisted.length, 1);
-            assert.equal((persisted[0]!.data as { requests: unknown[] }).requests.length, 1);
+            const first = persisted[0]!.data as { version: number; requests: unknown[] };
+
+            assert.equal(persisted.length, 2, "creating and showing the request each write a snapshot");
+            assert.equal(first.version, QUESTION_STATE_VERSION, "the snapshot carries the format it was written in");
+            assert.equal(first.requests.length, 1, "the request is in a snapshot before it is shown");
         });
 
         it("reports that the tool is unavailable outside the TUI", async () => {
@@ -207,7 +215,7 @@ describe("lune-ask-question extension", () => {
             assert.deepEqual(details.answers, [{ selectedIndexes: [0] }]);
         });
 
-        it("keeps the preview out of the delivered answer", async () => {
+        it("keeps the panel-only previews out of the delivered answer", async () => {
             const { host, ui } = await startSession();
             const tool = requireTool(host, "ask_user_questions");
             const ctx = createFakeContext({ ui, branch: host.branch });
@@ -217,7 +225,9 @@ describe("lune-ask-question extension", () => {
                 {
                     questions: [
                         {
+                            header: "Storage",
                             question: "Which database?",
+                            displayText: "DISPLAY_SENTINEL",
                             options: [{ label: "Postgres", preview: "PREVIEW_SENTINEL" }, { label: "SQLite" }],
                         },
                     ],
@@ -234,6 +244,11 @@ describe("lune-ask-question extension", () => {
                 false,
                 "a preview is display input, not part of the answer",
             );
+
+            const details = JSON.stringify(call.message.details);
+            assert.equal(details.includes("PREVIEW_SENTINEL"), false, "a preview must not enter the session transcript");
+            assert.equal(details.includes("DISPLAY_SENTINEL"), false, "neither must the display text");
+            assert.equal(details.includes("Postgres"), true, "the answer row still names the options");
             assert.deepEqual((call.message.details as { answers: unknown[] }).answers, [{ selectedIndexes: [0] }]);
         });
 
@@ -425,6 +440,7 @@ describe("lune-ask-question extension", () => {
             const { host, ui } = await startSession();
             const withPreview = (preview: string): AskQuestion[] => [
                 {
+                    header: "Storage",
                     question: "Which database?",
                     options: [{ label: "Postgres", preview }, { label: "SQLite" }],
                 },
@@ -440,6 +456,39 @@ describe("lune-ask-question extension", () => {
             const rendered = panelText(ui, 140);
             assert.match(rendered, /second preview/);
             assert.equal(rendered.includes("first preview"), false, "a new panel must not reuse the old cache");
+        });
+
+        it("keeps the dock on the request /question would reopen", async () => {
+            const { host, ui } = await startSession();
+
+            await ask(host, ui, QUESTIONS, "call-1");
+            ui.panel!.handleInput?.("\x1b");
+            await ui.panelClosed;
+            await drain();
+
+            await ask(host, ui, SECOND, "call-2");
+            assert.ok(await waitUntil(() => ui.customCalls.length === 2), "the new request surfaces");
+
+            // Showing the second request moved it behind the deferred first one, and the dock
+            // has to say so while the second panel is still up.
+            assert.match(
+                String(ui.mountedWidget("belowEditor", WIDGET_KEY)?.[0]),
+                /2 pending questions · Which database\?/,
+            );
+
+            ui.panel!.handleInput?.("\x1b");
+            await ui.panelClosed;
+            await drain();
+
+            assert.match(
+                String(ui.mountedWidget("belowEditor", WIDGET_KEY)?.[0]),
+                /2 pending questions · Which database\?/,
+            );
+
+            void host.commands.get("question")!.handler("", createFakeContext({ ui, branch: host.branch }));
+
+            assert.ok(await waitUntil(() => ui.customCalls.length === 3), "/question opens the request the dock names");
+            assert.match(panelText(ui), /Which database\?/);
         });
     });
 
@@ -548,6 +597,65 @@ describe("lune-ask-question extension", () => {
             await first.host.fire("session_tree", createFakeContext({ ui: first.ui, branch }));
 
             assert.equal(questionManager.getPendingRequests().length, 1);
+        });
+
+        it("does not let a stale overlay release the panel of the session that replaced it", async () => {
+            const { host, ui } = await startSession();
+
+            await ask(host, ui, QUESTIONS, "call-1");
+            assert.equal(ui.customCalls.length, 1);
+
+            // The session is replaced while the first overlay is still up.
+            const replacement = createFakeUi();
+            const replacementQuestions: AskQuestion[] = [
+                { header: "Port", question: "Which port?", options: [{ label: "8080" }, { label: "9090" }] },
+            ];
+            await host.fire("session_start", createFakeContext({ ui: replacement, branch: [] }));
+            await ask(host, replacement, replacementQuestions, "call-2");
+            assert.equal(replacement.customCalls.length, 1, "the replacement session owns its own panel");
+
+            // A disposed overlay can still resolve late: it must neither continue into the new
+            // session's queue nor release the ownership of the panel that is up.
+            ui.customCalls[0]!.close("settled");
+            await drain();
+
+            assert.equal(ui.customCalls.length, 1, "the stale loop must not open another panel");
+            assert.equal(replacement.customCalls.length, 1, "the live panel is still owned");
+
+            await ask(host, ui, QUESTIONS, "call-3");
+            assert.equal(ui.customCalls.length, 1, "a second panel cannot open while one is up");
+        });
+
+        it("releases the panel guard for the branch a tree jump lands on", async () => {
+            const { host, ui, branch } = await startSession();
+
+            await ask(host, ui, QUESTIONS, "call-1");
+            assert.equal(ui.customCalls.length, 1);
+
+            // The overlay never resolves while the branch changes under it.
+            await host.fire("session_tree", createFakeContext({ ui, branch }));
+
+            assert.equal(questionManager.getPendingRequests().length, 1, "the branch still holds the request");
+
+            void host.commands.get("question")!.handler("", createFakeContext({ ui, branch }));
+
+            assert.equal(ui.customCalls.length, 2, "/question can open the restored request");
+        });
+
+        it("reports a snapshot that could not be written", async () => {
+            const { host, ui } = await startSession();
+
+            host.api.appendEntry = () => {
+                throw new Error("session is read-only");
+            };
+
+            await ask(host, ui, QUESTIONS, "call-1");
+
+            assert.ok(ui.panel, "the question is still askable");
+            assert.ok(
+                ui.notifyCalls.some((call) => call.type === "error" && /could not be saved/.test(call.message)),
+                `expected a snapshot error notice, got ${JSON.stringify(ui.notifyCalls)}`,
+            );
         });
     });
 

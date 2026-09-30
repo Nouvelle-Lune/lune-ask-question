@@ -23,6 +23,8 @@ const DOWN = "\x1b[B";
 const TAB = "\t";
 const SHIFT_TAB = "\x1b[Z";
 const SPACE = " ";
+const PASTE_START = "\x1b[200~";
+const PASTE_END = "\x1b[201~";
 
 // Markdown styles headings and code through pi's module-level theme; the real TUI
 // initializes it before any extension renders.
@@ -747,14 +749,51 @@ describe("question panel", () => {
             );
         });
 
-        it("treats single-key shortcuts as text on the custom row", () => {
+        it("treats digits, j/k and space as text on the custom row", () => {
             const { panel, request } = createFixture(OPTION_QUESTIONS);
 
             panel.handleInput(UP);
-            type(panel, "s2j ");
+            type(panel, "2j ");
 
-            assert.equal(request.status, "pending", "s must not skip while the custom row is focused");
-            assert.equal(request.draft.customDrafts[0], "s2j ");
+            assert.equal(request.status, "pending", "a printable key on the custom row starts the answer");
+            assert.equal(request.draft.customDrafts[0], "2j ");
+        });
+
+        it("skips from the custom row with s", () => {
+            const { panel, request, counts } = createFixture(OPTION_QUESTIONS);
+
+            panel.handleInput(UP);
+            panel.handleInput("s");
+
+            assert.equal(request.status, "skipped");
+            assert.equal(counts.closed, 1);
+        });
+
+        it("keeps a large paste when the draft is captured", () => {
+            const { panel, request } = createFixture(OPTION_QUESTIONS);
+            const pasted = Array.from({ length: 12 }, (_, index) => `line ${index}`).join("\n");
+
+            // option 0 -> custom row, then the editor
+            panel.handleInput(UP);
+            panel.handleInput(ENTER);
+            panel.handleInput(`${PASTE_START}${pasted}${PASTE_END}`);
+
+            // The editor holds a paste this large behind a marker; the draft has to keep the text.
+            panel.handleInput(ESCAPE);
+
+            assert.equal(request.draft.customDrafts[0], pasted);
+
+            const reopened = new QuestionPanel({
+                request,
+                tui: createFakeTui(),
+                theme: createFakeTheme(),
+                keybindings: createFakeKeybindings(),
+                close: () => undefined,
+            });
+
+            reopened.handleInput(ENTER);
+
+            assert.match(renderText(reopened), /line 11/, "the pasted lines are back in the editor");
         });
 
         it("does not mirror edits to an answer that was already written", () => {
@@ -873,6 +912,34 @@ describe("question panel", () => {
 
             assert.deepEqual(request.answers, [{ selectedIndexes: [], customText: "is" }]);
             assert.equal(counts.closed, 1);
+        });
+
+        it("skips a free-form question after leaving its editor", () => {
+            const { panel, request, counts } = createFixture([{ question: "Name the service?" }]);
+
+            // A free-form question opens the editor itself, so `s` has to stay reachable
+            // through Esc instead of being a key the user can never press.
+            assert.match(renderText(panel), /Your answer:/);
+
+            panel.handleInput(ESCAPE);
+            assert.equal(renderText(panel).includes("Your answer:"), false, "the first Esc leaves the editor");
+
+            panel.handleInput("s");
+
+            assert.equal(request.status, "skipped");
+            assert.equal(counts.closed, 1);
+        });
+
+        it("does not advertise s while the editor owns the key", () => {
+            const { panel } = createFixture(OPTION_QUESTIONS);
+
+            panel.handleInput(UP);
+            panel.handleInput(ENTER);
+
+            const footer = innerLines(panel).at(-1)!;
+
+            assert.match(footer, /Esc back to options/);
+            assert.equal(footer.includes("s skip"), false, "the editor turns s into text");
         });
     });
 });

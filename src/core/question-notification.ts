@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { formatAnswerMessage } from "./question-format.ts";
 import { questionManager } from "./questionManager.ts";
+import type { AnswerMessageQuestion, AskQuestion } from "./questionManager.ts";
 
 /** Custom message type carrying answers (or a skip) back to the model. */
 export const ASK_QUESTION_ANSWER_MESSAGE = "lune-ask-question-answer";
@@ -50,7 +51,7 @@ export function registerQuestionAnswerNotifications(
                     details: {
                         requestId: request.id,
                         status: request.status,
-                        questions: request.questions,
+                        questions: request.questions.map(toAnswerMessageQuestion),
                         answers: request.answers,
                     },
                 },
@@ -63,4 +64,13 @@ export function registerQuestionAnswerNotifications(
             options.onError?.(error);
         }
     });
+}
+
+/** The answer row reads the label, the prompt and the option names; previews stay in the panel. */
+function toAnswerMessageQuestion(question: AskQuestion): AnswerMessageQuestion {
+    return {
+        header: question.header,
+        question: question.question,
+        options: question.options?.map((option) => ({ label: option.label })),
+    };
 }
