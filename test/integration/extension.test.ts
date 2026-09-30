@@ -6,9 +6,13 @@
  * `sendMessage` follow-up, and the session lifecycle persists and restores pending
  * questions. The panel's own key handling is covered by `test/unit/question-panel.test.ts`;
  * here it is only driven far enough to settle a request.
+ *
+ * The host is this repo's fake, not a Pi `AgentSession`, so what is pinned here is the
+ * extension's contract with the host API it calls. `npm run tui:demo` is the only check that
+ * runs the extension inside a real pi process.
  */
 import assert from "node:assert/strict";
-import { beforeEach, describe, it } from "node:test";
+import { afterEach, beforeEach, describe, it } from "node:test";
 
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 
@@ -44,6 +48,9 @@ interface Session {
     readonly branch: FakeBranchEntry[];
 }
 
+/** Sessions started by the current test, so their listeners cannot outlive it. */
+const liveSessions: Session[] = [];
+
 /** Register the extension and start a session over `branch`, defaulting to a fresh one. */
 async function startSession(branch: FakeBranchEntry[] = []): Promise<Session> {
     const host = createFakePiHost(luneAskQuestion, { branch });
@@ -52,7 +59,10 @@ async function startSession(branch: FakeBranchEntry[] = []): Promise<Session> {
 
     await host.fire("session_start", ctx);
 
-    return { host, ui, branch };
+    const session = { host, ui, branch };
+    liveSessions.push(session);
+
+    return session;
 }
 
 /** Answer the currently open panel with its focused option. */
@@ -107,6 +117,17 @@ describe("lune-ask-question extension", () => {
     beforeEach(() => {
         resetQuestionPanelState();
         questionManager.clearAll();
+    });
+
+    afterEach(async () => {
+        // The manager and the dock are module singletons, so a listener left subscribed after
+        // its test would fire into a finished test's fake ui on every later manager event.
+        for (const session of liveSessions.splice(0)) {
+            await session.host.fire(
+                "session_shutdown",
+                createFakeContext({ ui: session.ui, branch: session.branch }),
+            );
+        }
     });
 
     describe("registration", () => {
@@ -531,7 +552,7 @@ describe("lune-ask-question extension", () => {
         });
     });
 
-    describe("session lifecycle", () => {
+    describe("session lifecycle (fake host)", () => {
         it("restores pending questions and the dock after a restart", async () => {
             const branch: FakeBranchEntry[] = [];
 
@@ -624,6 +645,27 @@ describe("lune-ask-question extension", () => {
 
             await ask(host, ui, QUESTIONS, "call-3");
             assert.equal(ui.customCalls.length, 1, "a second panel cannot open while one is up");
+        });
+
+        it("starts a replacement session without writing to the replaced context", async () => {
+            const { host, ui } = await startSession();
+
+            await ask(host, ui, QUESTIONS, "call-1");
+            assert.equal(ui.customCalls.length, 1);
+
+            const writesToFirst = ui.widgetCalls.length;
+            const replacement = createFakeUi();
+
+            // The fake host can deliver a second session_start to the same extension
+            // instance, which is what a reload looks like from the module's side.
+            await host.fire("session_start", createFakeContext({ ui: replacement, branch: [] }));
+
+            assert.equal(ui.widgetCalls.length, writesToFirst, "the replaced session's ui must not be written to");
+            assert.equal(
+                replacement.mountedWidget("belowEditor", WIDGET_KEY),
+                undefined,
+                "and the replacement session's dock is the one that renders",
+            );
         });
 
         it("releases the panel guard for the branch a tree jump lands on", async () => {

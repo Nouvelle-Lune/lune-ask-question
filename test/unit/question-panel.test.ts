@@ -25,6 +25,9 @@ const SHIFT_TAB = "\x1b[Z";
 const SPACE = " ";
 const PASTE_START = "\x1b[200~";
 const PASTE_END = "\x1b[201~";
+// Kitty keyboard protocol: Shift+S with flag 1, and with flag 4 reporting the shifted key.
+const SHIFT_S = "\x1b[115;2u";
+const SHIFT_S_ALT_KEY = "\x1b[115:83;2u";
 
 // Markdown styles headings and code through pi's module-level theme; the real TUI
 // initializes it before any extension renders.
@@ -904,6 +907,17 @@ describe("question panel", () => {
             assert.equal(counts.deferred, 0);
         });
 
+        it("skips on the Kitty-protocol spelling of Shift+S", () => {
+            for (const sequence of [SHIFT_S, SHIFT_S_ALT_KEY]) {
+                const { panel, request, counts } = createFixture(OPTION_QUESTIONS);
+
+                panel.handleInput(sequence);
+
+                assert.equal(request.status, "skipped", `${JSON.stringify(sequence)} is Shift+S`);
+                assert.equal(counts.closed, 1);
+            }
+        });
+
         it("leaves a plain s to the text it belongs to", () => {
             const { panel, request, counts } = createFixture(OPTION_QUESTIONS);
 
@@ -936,6 +950,16 @@ describe("question panel", () => {
             panel.handleInput("S");
 
             assert.equal(request.status, "skipped");
+            assert.equal(counts.closed, 1);
+        });
+
+        it("skips a free-form question on the Kitty-protocol Shift+S", () => {
+            const { panel, request, counts } = createFixture([{ question: "Name the service?" }]);
+
+            panel.handleInput(ESCAPE);
+            panel.handleInput(SHIFT_S_ALT_KEY);
+
+            assert.equal(request.status, "skipped", "the sequence is the only Shift+S a kitty terminal sends");
             assert.equal(counts.closed, 1);
         });
 

@@ -275,7 +275,9 @@ export class QuestionPanel implements Component, Focusable {
         // Skip is Shift+S, and it is checked before the custom-row shortcut: a free-form
         // question opens its editor by itself, so Esc has to leave a key that still skips,
         // while a plain `s` stays the letter it is everywhere else - the start of an answer.
-        if (data === "S") {
+        // A Kitty-protocol terminal reports a modified key as a CSI sequence instead of the
+        // uppercase byte, so matching `"S"` alone would leave skip unreachable there.
+        if (data === "S" || matchesKey(data, Key.shift("s"))) {
             this.skipRequest();
             return;
         }

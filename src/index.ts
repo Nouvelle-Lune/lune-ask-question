@@ -35,16 +35,20 @@ export default function (pi: ExtensionAPI): void {
     let unsubscribeNotifications: (() => void) | undefined;
 
     pi.on("session_start", (_event, ctx) => {
+        // The previous session's listeners close over its ctx and a duplicate subscription
+        // would render and persist twice per event, so they go first - before the state
+        // changes below would wake them.
+        unsubscribeManager?.();
+        unsubscribeManager = undefined;
+        unsubscribeNotifications?.();
+        unsubscribeNotifications = undefined;
+
         // Module state may survive extension reloads, so a session starts from its own
         // branch: clear first, then restore the pending questions recorded there.
         resetQuestionPanelState();
         questionManager.clearAll();
-        questionManager.restore(ctx);
         questionDock.setCtx(ctx);
-
-        // Drop the previous session's listener first: it closes over a stale ctx, and a
-        // duplicate subscription would render and persist twice per event.
-        unsubscribeManager?.();
+        questionManager.restore(ctx);
 
         unsubscribeManager = questionManager.subscribe(
             (event) => {
@@ -72,7 +76,6 @@ export default function (pi: ExtensionAPI): void {
 
         // Registered after the persist listener: the snapshot has to exist before the
         // answer message resumes the model.
-        unsubscribeNotifications?.();
         unsubscribeNotifications = registerQuestionAnswerNotifications(pi, {
             onError: (error) => {
                 ctx.ui.notify(

@@ -42,7 +42,7 @@ There is nothing to enter and no mode to switch: when the model needs a decision
 | `Space` | Toggle the focused option in a multi-select question |
 | `1`–`9` | Pick an option by number |
 | `Tab`, `⇧Tab`, `←` `→` | Switch question tabs and the `✓ Submit` tab |
-| Any printable key on `Type something` | Open the answer editor with that key |
+| Any printable key except `S` on `Type something` | Open the answer editor with that key |
 | `Enter` in the editor | Submit the written answer |
 | `Esc` in the editor | Back to the options, keeping the draft |
 | `Esc` | Close the panel and leave the request pending |
@@ -50,7 +50,7 @@ There is nothing to enter and no mode to switch: when the model needs a decision
 
 A single-question request submits on the option press. Several questions walk through their tabs and meet on the `✓ Submit` tab, and submitting with a gap jumps to the first unanswered question instead of doing nothing.
 
-Skip is `Shift+S` so that a plain `s` stays available as the first letter of an answer; the one place that asks for `Enter` first is a `Type something` row whose answer starts with a capital `S`.
+Skip is `Shift+S` so that a plain `s` stays available as the first letter of an answer, and it is the one shortcut the editor does not take over: on a `Type something` row, an answer that starts with a capital `S` starts with `Enter` instead.
 
 Answers land in the transcript and resume the model:
 
@@ -72,11 +72,11 @@ The panel picks the least recently shown pending request, so a question that jus
 | --- | --- |
 | `questions[].question` | A single-sentence, atomic decision prompt |
 | `questions[].header` | Short subject label (`Storage`, `Auth`, `Timeouts`) shown as the tab label |
-| `questions[].displayText` | Optional Markdown context above the answer controls, such as a preview or a snippet |
+| `questions[].displayText` | Optional Markdown shared by every option: the context or evidence the whole question needs, such as a diff, an excerpt or the current values |
 | `questions[].options[]` | Two to four mutually distinct choices; omit the field for free-form input |
 | `questions[].options[].label` | Short choice label; put the preferred option first with `(Recommended)` |
 | `questions[].options[].description` | One sentence on the consequence or tradeoff |
-| `questions[].options[].preview` | Optional Markdown for the comparison pane, roughly a dozen lines |
+| `questions[].options[].preview` | Optional Markdown artifact of this option, shown in the pane beside the options while it is focused; roughly a dozen lines |
 | `questions[].multiSelect` | Whether several options can apply together |
 
 At most four questions per request, and the model is told to ask the smallest set that unblocks it: inspect first, use a reasonable default for low-impact choices, and only stop when progress depends on the answer.
@@ -94,6 +94,8 @@ LAQ_DEMO=two npm run tui:demo   # queue a second request to watch the handover
 LAQ_DEMO=multi npm run tui:demo # one request with three questions, to watch the tabs
 npm run docs:images       # regenerate docs/*.svg + docs/*.png (needs rsvg-convert)
 ```
+
+`npm test` runs unit tests plus integration tests that drive `src/index.ts` through a fake pi host: the host API the extension calls, not a real Pi `AgentSession`. `npm run tui:demo` is the only check that runs the extension inside a real pi process.
 
 `docs:images` renders the README screenshots from the real panel, dock and answer-row components against Pi's dark theme palette, so a UI change is one command away from an up-to-date image.
 

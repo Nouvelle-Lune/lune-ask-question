@@ -37,7 +37,7 @@ export function askUserQuestions(persist: (ctx: ExtensionContext) => void) {
         promptGuidelines: [
             "Ask only when the answer materially changes what you should do next; inspect the conversation and workspace first, and use reasonable defaults for low-impact choices.",
             "Ask the smallest set of questions needed. After calling the tool, continue independent work and stop only when further progress depends on the answers.",
-            "Use option previews for concrete alternatives that benefit from visual comparison - code, configuration, structured text, or UI mockups - and do not add previews to simple preference questions. The pane is titled with the option label, so a preview must not repeat it.",
+            "Use option previews for concrete alternatives that benefit from visual comparison - code, configuration, structured text, or UI mockups - and do not add previews to simple preference questions. The pane is titled with the option label, so a preview must not repeat it; anything shared by every option belongs in displayText instead.",
             "Give every question a short header naming its subject ('Storage', 'Auth', 'Timeouts'); the panel shows it as the tab label. The header is required, so never number questions yourself or repeat the question text.",
         ],
         parameters: askUserQuestionsSchema,
@@ -131,7 +131,7 @@ const askUserQuestionsSchema = Type.Object({
             displayText: Type.Optional(
                 Type.String({
                     description:
-                        "Optional context shown before the answer controls when the user needs to inspect something to make the decision, such as a preview, code snippet, rendered text, or concrete example. Do not use this for generic explanation that belongs in the question or option descriptions.",
+                        "Optional Markdown shown above the answer controls, the same for every option: the context or evidence the whole question needs, such as a diff, an excerpt, or the current values. It is not for generic explanation that belongs in the question or option descriptions, and anything that changes with the focused option belongs in that option's preview instead.",
                 }),
             ),
 
@@ -153,7 +153,7 @@ const askUserQuestionsSchema = Type.Object({
                         preview: Type.Optional(
                             Type.String({
                                 description:
-                                    "Optional Markdown preview shown in a pane beside the options while this option is focused. Use it for mockups, code, config snippets, or other concrete comparisons that the label and description cannot convey on their own; keep it to roughly a dozen lines.",
+                                    "Optional Markdown artifact for this one option, shown in a pane beside the options while it is focused and titled with its label. Use it when the choice is worth comparing rather than describing - a mockup, a code or config snippet, a concrete before/after - and keep it to roughly a dozen lines.",
                             }),
                         ),
                     }),
