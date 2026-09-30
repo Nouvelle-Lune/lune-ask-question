@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="879" height="167" viewBox="0 0 879 167" font-family="Menlo, ui-monospace, monospace" font-size="14">
+<rect width="879" height="167" rx="10" fill="#21252c"/>
+<rect y="0" width="879" height="34" rx="10" fill="#768186" opacity="0.25"/>
+<circle cx="24" cy="17" r="5" fill="#ff5f57"/><circle cx="42" cy="17" r="5" fill="#febc2e"/><circle cx="60" cy="17" r="5" fill="#28c840"/>
+<text x="80" y="22" fill="#9da5a9" font-size="13">pi — the answer message that resumes the model</text>
+
+<text x="18" y="66.0" fill="#dee0e1" xml:space="preserve"><tspan fill="#68b78d" font-weight="600">Questions answered</tspan><tspan>                                                                                  </tspan></text>
+
+<text x="18" y="85.4" fill="#dee0e1" xml:space="preserve"><tspan fill="#9da5a9">Storage: </tspan><tspan fill="#dee0e1">Where should the new session index live?</tspan><tspan>                                                   </tspan></text>
+
+<text x="18" y="104.8" fill="#dee0e1" xml:space="preserve"><tspan>    </tspan><tspan fill="#a798d7">selected: 1. SQLite index (Recommended)</tspan><tspan>                                                         </tspan></text>
+
+<text x="18" y="124.2" fill="#dee0e1" xml:space="preserve"><tspan fill="#9da5a9">Timeouts: </tspan><tspan fill="#dee0e1">How should a stalled shell job be reported?</tspan><tspan>                                               </tspan></text>
+
+<text x="18" y="143.6" fill="#dee0e1" xml:space="preserve"><tspan>    </tspan><tspan fill="#a798d7">wrote: Warn at 60s, kill at 90s</tspan><tspan>                                                                 </tspan></text>
+</svg>

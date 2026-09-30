@@ -5,6 +5,7 @@
   "type": "module",
   "files": [
     "src",
+    "docs",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"
@@ -12,12 +13,14 @@
   "pi": {
     "extensions": [
       "./src/index.ts"
-    ]
+    ],
+    "image": "./docs/question-panel.png"
   },
   "scripts": {
     "test": "node --experimental-strip-types --test 'test/**/*.test.ts'",
     "typecheck": "tsc --noEmit",
-    "tui:demo": "node --experimental-strip-types test/tui/launch.ts"
+    "tui:demo": "node --experimental-strip-types test/tui/launch.ts",
+    "docs:images": "node --experimental-strip-types tools/make-doc-images.mjs"
   },
   "keywords": [
     "pi-package",
