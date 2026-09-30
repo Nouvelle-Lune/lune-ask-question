@@ -333,7 +333,8 @@ describe("lune-ask-question extension", () => {
 
             assert.match(panelText(ui), /Which database\?/, "the first call owns the panel");
             assert.equal(questionManager.getPendingRequests().length, 2);
-            assert.match(String(ui.mountedWidget("belowEditor", WIDGET_KEY)?.[0]), /2 pending questions · Which database\?/);
+            // The dock names the question the panel would show next, which is the queued one.
+            assert.match(String(ui.mountedWidget("belowEditor", WIDGET_KEY)?.[0]), /2 pending questions · Which port\?/);
 
             answerFocusedOption(ui);
             assert.ok(await waitUntil(() => ui.customCalls.length === 2), "the queued call surfaces");
@@ -363,41 +364,61 @@ describe("lune-ask-question extension", () => {
             assert.equal(ui.customCalls.length, 3, "no panel is opened for an empty queue");
         });
 
-        it("stops auto-surfacing after a defer and keeps every request pending", async () => {
+        it("shows a new request ahead of an older one that was only deferred", async () => {
             const { host, ui } = await startSession();
 
             await ask(host, ui, QUESTIONS, "call-1");
+            ui.panel!.handleInput?.("\x1b");
+            await ui.panelClosed;
+            await drain();
+
             await ask(host, ui, SECOND, "call-2");
 
+            assert.ok(await waitUntil(() => ui.customCalls.length === 2), "the new request surfaces");
+            assert.match(panelText(ui), /Which port\?/);
+            assert.equal(questionManager.getPendingRequests().length, 2, "the deferred request stays pending");
+        });
+
+        it("stops auto-surfacing after a defer and keeps the request pending", async () => {
+            const { host, ui } = await startSession();
+
+            await ask(host, ui, QUESTIONS, "call-1");
             ui.panel!.handleInput?.("\x1b");
             await ui.panelClosed;
             await drain();
 
             assert.equal(ui.customCalls.length, 1, "a defer is quiet: no panel pops back up");
-            assert.equal(questionManager.getPendingRequests().length, 2);
+            assert.equal(questionManager.getPendingRequests().length, 1);
 
-            // The explicit command is what brings the panel back, oldest request first.
+            // The explicit command is what brings the panel back.
             void host.commands.get("question")!.handler("", createFakeContext({ ui, branch: host.branch }));
-            assert.ok(await waitUntil(() => ui.customCalls.length === 2), "/question reopens the oldest request");
+            assert.ok(await waitUntil(() => ui.customCalls.length === 2), "/question reopens the request");
             assert.match(panelText(ui), /Which database\?/);
         });
 
-        it("reopens the oldest pending request when a new one arrives after a defer", async () => {
+        it("falls back to the request that was shown least recently", async () => {
             const { host, ui } = await startSession();
 
+            // The first request is shown and deferred; the second arrives, is shown and deferred.
             await ask(host, ui, QUESTIONS, "call-1");
             ui.panel!.handleInput?.("\x1b");
             await ui.panelClosed;
             await drain();
 
-            assert.equal(ui.customCalls.length, 1, "the defer is quiet");
-
-            // A defer pauses the queue; the next incoming request is a new event and resumes it.
             await ask(host, ui, SECOND, "call-2");
+            assert.ok(await waitUntil(() => ui.customCalls.length === 2), "the new request surfaces");
+            assert.match(panelText(ui), /Which port\?/);
 
-            assert.equal(ui.customCalls.length, 2);
-            assert.match(panelText(ui), /Which database\?/, "oldest first, even after a defer");
+            ui.panel!.handleInput?.("\x1b");
+            await ui.panelClosed;
+            await drain();
+
             assert.equal(questionManager.getPendingRequests().length, 2);
+
+            // Nothing is unseen any more, so `/question` returns to the least recently shown one.
+            void host.commands.get("question")!.handler("", createFakeContext({ ui, branch: host.branch }));
+            assert.ok(await waitUntil(() => ui.customCalls.length === 3), "/question reopens a pending request");
+            assert.match(panelText(ui), /Which database\?/);
         });
 
         it("gives the next request fresh preview renderers", async () => {

@@ -44,6 +44,7 @@ export type QuestionManagerListener = (event: QuestionManagerEvent) => void;
 export class QuestionManager {
     private readonly requests = new Map<string, AskQuestionRequest>();
     private readonly listeners = new Set<QuestionManagerListener>();
+    private shownSeqCounter = 0;
 
     create(questions: readonly AskQuestion[]): AskQuestionRequest {
         const request: AskQuestionRequest = {
@@ -64,11 +65,40 @@ export class QuestionManager {
         return this.requests.get(id);
     }
 
-    /** Pending requests oldest first; this is the order `/question` walks through. */
+    /** Pending requests oldest first; this is the order they were created in. */
     getPendingRequests(): readonly AskQuestionRequest[] {
         return Array.from(this.requests.values())
             .filter((request) => request.status === "pending")
             .sort((left, right) => left.createdAt - right.createdAt);
+    }
+
+    /**
+     * The pending request the panel should show next.
+     *
+     * Least recently shown first, with a request that was never shown ahead of all of them: a
+     * question that just arrived has to surface immediately, while one the user dismissed with
+     * Esc must not pop back up in front of it. Requests that were never shown fall back to the
+     * order they were created in.
+     */
+    nextPendingRequest(): AskQuestionRequest | undefined {
+        let next: AskQuestionRequest | undefined;
+
+        for (const request of this.getPendingRequests()) {
+            if (next === undefined || shownOrder(request) < shownOrder(next)) {
+                next = request;
+            }
+        }
+
+        return next;
+    }
+
+    /** Record that the panel is showing `id`, which moves it behind the requests it passed. */
+    markShown(id: string): void {
+        const request = this.getPendingRequest(id);
+
+        if (request) {
+            request.shownSeq = ++this.shownSeqCounter;
+        }
     }
 
     getPendingRequest(id: string): AskQuestionRequest | undefined {
@@ -175,6 +205,7 @@ export class QuestionManager {
             }
 
             this.requests.set(saved.id, normalizeRequest(saved));
+            this.shownSeqCounter = Math.max(this.shownSeqCounter, saved.shownSeq ?? 0);
             restored = true;
         }
 
@@ -255,10 +286,16 @@ function normalizeRequest(saved: AskQuestionRequest): AskQuestionRequest {
     return {
         id: saved.id,
         createdAt: typeof saved.createdAt === "number" ? saved.createdAt : Date.now(),
+        shownSeq: typeof saved.shownSeq === "number" && Number.isFinite(saved.shownSeq) ? saved.shownSeq : undefined,
         questions: saved.questions.map(copyQuestion),
         status: "pending",
         draft: normalizeDraft(saved.draft, saved.questions.length),
     };
+}
+
+/** Requests that were never shown sort before every shown one. */
+function shownOrder(request: AskQuestionRequest): number {
+    return request.shownSeq ?? -1;
 }
 
 function normalizeDraft(draft: AskQuestionDraft | undefined, questionCount: number): AskQuestionDraft {

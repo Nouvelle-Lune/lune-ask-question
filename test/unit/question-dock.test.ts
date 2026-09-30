@@ -72,13 +72,25 @@ describe("question dock", () => {
         });
     });
 
-    it("counts several pending requests and previews the oldest", () => {
+    it("counts several pending requests and previews the next one", () => {
         questionManager.create([{ question: "First question" }]);
         questionManager.create([{ question: "Second question" }]);
 
         render();
 
         assert.equal(line(), "2 pending questions · First question · /question to answer");
+    });
+
+    it("previews the request the panel would show next", () => {
+        const first = questionManager.create([{ question: "First question" }]);
+        questionManager.create([{ question: "Second question" }]);
+
+        // The first one was already on screen, so the newer one is what comes next.
+        questionManager.markShown(first.id);
+
+        render();
+
+        assert.equal(line(), "2 pending questions · Second question · /question to answer");
     });
 
     it("truncates a long question and keeps one line", () => {

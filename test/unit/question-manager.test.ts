@@ -146,6 +146,74 @@ describe("question manager", () => {
         });
     });
 
+    describe("showing order", () => {
+        it("prefers a request that was never shown", () => {
+            const manager = newManager();
+            const first = manager.create(QUESTIONS);
+            const second = manager.create(QUESTIONS);
+
+            manager.markShown(first.id);
+
+            assert.equal(manager.nextPendingRequest()?.id, second.id);
+        });
+
+        it("falls back to the request that was shown least recently", () => {
+            const manager = newManager();
+            const first = manager.create(QUESTIONS);
+            const second = manager.create(QUESTIONS);
+
+            manager.markShown(first.id);
+            manager.markShown(second.id);
+
+            assert.equal(manager.nextPendingRequest()?.id, first.id);
+        });
+
+        it("keeps the createdAt order between requests that were never shown", () => {
+            const manager = newManager();
+            const first = manager.create(QUESTIONS);
+            manager.create(QUESTIONS);
+
+            assert.equal(manager.nextPendingRequest()?.id, first.id);
+        });
+
+        it("ignores settled requests", () => {
+            const manager = newManager();
+            const request = manager.create(QUESTIONS);
+
+            manager.submit(request.id, [{ selectedIndexes: [0] }, { selectedIndexes: [0] }]);
+
+            assert.equal(manager.nextPendingRequest(), undefined);
+        });
+
+        it("ignores an unknown id when marking a request as shown", () => {
+            const manager = newManager();
+            const request = manager.create(QUESTIONS);
+
+            manager.markShown("missing");
+
+            assert.equal(manager.get(request.id)?.shownSeq, undefined);
+        });
+
+        it("keeps the showing order across a restore", () => {
+            const manager = newManager();
+            const first = manager.create(QUESTIONS);
+            const second = manager.create(QUESTIONS);
+
+            manager.markShown(first.id);
+            manager.markShown(second.id);
+
+            const resumed = newManager();
+            resumed.restore(createFakeContext({ branch: branchWith(manager.snapshot()) }));
+
+            assert.equal(resumed.nextPendingRequest()?.id, first.id, "the least recently shown one comes first");
+
+            // A request that arrives after the restart still outranks the restored ones.
+            const third = resumed.create(QUESTIONS);
+
+            assert.equal(resumed.nextPendingRequest()?.id, third.id);
+        });
+    });
+
     describe("persistence", () => {
         it("persists only pending requests, at the state entry key", () => {
             const manager = newManager();

@@ -56,6 +56,11 @@ export interface AskQuestionRequest {
     id: string;
     createdAt: number;
     questions: AskQuestion[];
+    /**
+     * Order in which the panel showed this request, used to pick which one to show next: a
+     * request that was never shown comes first, otherwise the least recently shown one does.
+     */
+    shownSeq?: number;
     status: AskQuestionStatus;
     draft: AskQuestionDraft;
     answers?: AskQuestionAnswer[];

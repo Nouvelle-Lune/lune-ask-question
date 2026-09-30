@@ -88,13 +88,14 @@ export function resetQuestionPanelState(): void {
 }
 
 /**
- * Show pending requests, oldest first, until there is nothing left to answer.
+ * Show pending requests, least recently shown first, until there is nothing left to answer.
  *
  * Called immediately after a request is created, and again from `/question`. A request that
  * arrives while a panel is open does not have to wait for `/question`: it is already pending,
- * so the loop picks it up as soon as the current panel settles. Deferring (Esc) ends the loop
- * on purpose - the user asked for quiet, not for the next question - and the request stays
- * pending for `/question`.
+ * so the loop picks it up as soon as the current panel settles - and because it was never
+ * shown, it comes before a request the user only deferred. Deferring (Esc) ends the loop on
+ * purpose - the user asked for quiet, not for the next question - and the request stays pending
+ * for `/question`.
  *
  * The panel never settles the request when Esc closes it, so the promise completing only
  * means the overlay is gone, not that the questions were answered.
@@ -113,11 +114,15 @@ export async function openQuestionPanel(
         let reason: PanelCloseReason | undefined;
 
         do {
-            const request = questionManager.getPendingRequests()[0];
+            const request = questionManager.nextPendingRequest();
 
             if (!request) {
                 break;
             }
+
+            // Claim it before showing it, so a request the user defers does not outrank one
+            // that has never been shown.
+            questionManager.markShown(request.id);
 
             reason = await showQuestionPanel(ctx, request, options);
         } while (reason === "settled" && questionManager.getPendingRequests().length > 0);
