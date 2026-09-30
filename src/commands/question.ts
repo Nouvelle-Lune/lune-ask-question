@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { questionManager } from "../core/questionManager.ts";
-import { openQuestionPanel } from "../tui/question-panel.ts";
+import { openQuestionPanel } from "../tui/panel/question-panel.ts";
 
 /** Reopen the panel after Esc closed it, without having to ask the model again. */
 export function registerQuestionCommand(pi: ExtensionAPI, persist: (ctx: ExtensionContext) => void): void {

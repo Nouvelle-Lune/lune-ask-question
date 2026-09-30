@@ -15,7 +15,7 @@ import type { AskQuestion } from "../../src/core/questionManager.ts";
 import {
     BORDER_VERTICAL_OVERHEAD,
     MIN_BOX_INNER_WIDTH,
-} from "../../src/tui/preview-box.ts";
+} from "../../src/tui/preview/preview-box.ts";
 import {
     MAX_LEFT_RATIO,
     MIN_LEFT_WIDTH,
@@ -29,7 +29,7 @@ import {
     previewBlockRowBudget,
     previewColumnWidths,
     questionHasPreview,
-} from "../../src/tui/preview-layout.ts";
+} from "../../src/tui/preview/preview-layout.ts";
 
 function singleSelect(label: string): AskQuestion {
     return { question: "Q?", options: [{ label: "a" }, { label }] };

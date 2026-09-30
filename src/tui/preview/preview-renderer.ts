@@ -16,7 +16,7 @@
 import { getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";
 import { Markdown, type MarkdownTheme } from "@earendil-works/pi-tui";
 
-import type { AskQuestion } from "../core/question-types.ts";
+import type { AskQuestion } from "../../core/question-types.ts";
 import {
     BORDER_HORIZONTAL_OVERHEAD,
     BORDER_INNER_PADDING_HORIZONTAL,

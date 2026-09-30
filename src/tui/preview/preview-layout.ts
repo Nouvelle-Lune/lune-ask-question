@@ -7,7 +7,7 @@
  */
 import { visibleWidth } from "@earendil-works/pi-tui";
 
-import type { AskQuestion, AskQuestionOption } from "../core/question-types.ts";
+import type { AskQuestion, AskQuestionOption } from "../../core/question-types.ts";
 import { BORDER_VERTICAL_OVERHEAD } from "./preview-box.ts";
 
 /**

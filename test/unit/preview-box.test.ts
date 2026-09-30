@@ -14,7 +14,7 @@ import {
     computeBoxWidth,
     renderBorderedBox,
     stripFenceMarkers,
-} from "../../src/tui/preview-box.ts";
+} from "../../src/tui/preview/preview-box.ts";
 
 const identity = (text: string) => text;
 

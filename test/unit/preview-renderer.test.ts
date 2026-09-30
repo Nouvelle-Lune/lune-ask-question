@@ -12,7 +12,7 @@ import { initTheme } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 
 import type { AskQuestion } from "../../src/core/questionManager.ts";
-import { QuestionPreviewRenderer } from "../../src/tui/preview-renderer.ts";
+import { QuestionPreviewRenderer } from "../../src/tui/preview/preview-renderer.ts";
 import { createFakeTheme } from "../harness.ts";
 
 // Markdown highlights code blocks through pi's module-level theme; the real TUI

@@ -4,7 +4,7 @@ import { Text } from "@earendil-works/pi-tui";
 
 import { formatPendingMessage, summarizeText } from "../core/question-format.ts";
 import { questionManager } from "../core/questionManager.ts";
-import { openQuestionPanel } from "../tui/question-panel.ts";
+import { openQuestionPanel } from "../tui/panel/question-panel.ts";
 
 import Type from "typebox";
 

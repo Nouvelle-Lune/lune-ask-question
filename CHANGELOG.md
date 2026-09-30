@@ -37,3 +37,7 @@
 - **A failed snapshot no longer sticks the panel.** `Esc` wrote the snapshot before closing the overlay, so a throwing `appendEntry` left the panel up with no way out, and the same throw could cut short a shutdown or a tree switch. Persistence now reports the failure instead of raising it, and the overlay closes either way.
 - **The dock follows the request `/question` would reopen.** `markShown` moved a request behind the ones it had already been shown after without emitting an event, so the dock could name one question while `/question` opened another. It now emits `request-shown`, which also writes the new order to the session immediately instead of at the next settle point.
 - **A snapshot that could not be written is reported.** Listener failures were swallowed, which could hide a persistence error while the in-memory state moved on. The manager reports them, and the extension says that the question state could not be saved.
+
+### Refactored
+
+- **The panel's interaction model and renderer are separate modules.** `QuestionPanelController` owns the draft transitions and the row model, `QuestionPanelRenderer` owns the frame, option rows and preview layout, and `QuestionPanel` is left with input routing, editor ownership and overlay lifecycle. The draft stays the single source of interaction state, so existing exports, behavior and persistence are unchanged.

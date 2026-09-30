@@ -19,7 +19,7 @@ import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import luneAskQuestion from "../../src/index.ts";
 import { QUESTION_STATE_ENTRY, QUESTION_STATE_VERSION, questionManager, type AskQuestion } from "../../src/core/questionManager.ts";
 import { ASK_QUESTION_ANSWER_MESSAGE } from "../../src/core/question-notification.ts";
-import { resetQuestionPanelState } from "../../src/tui/question-panel.ts";
+import { resetQuestionPanelState } from "../../src/tui/panel/question-panel.ts";
 import {
     createFakeContext,
     createFakePiHost,

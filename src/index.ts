@@ -9,7 +9,7 @@ import {
     type AskQuestionAnswerMessageDetails,
 } from "./tui/question-answer-message.ts";
 import { questionDock } from "./tui/question-dock.ts";
-import { resetQuestionPanelState } from "./tui/question-panel.ts";
+import { resetQuestionPanelState } from "./tui/panel/question-panel.ts";
 
 export default function (pi: ExtensionAPI): void {
     /**

@@ -9,7 +9,7 @@ import {
     type AskQuestion,
     type AskQuestionRequest,
 } from "../../src/core/questionManager.ts";
-import { QuestionPanel } from "../../src/tui/question-panel.ts";
+import { QuestionPanel } from "../../src/tui/panel/question-panel.ts";
 import {
     createFakeKeybindings,
     createFakeTheme,

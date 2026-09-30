@@ -27,7 +27,7 @@ import { Container, Text, colorToHex, parseColor, visibleWidth } from "@earendil
 import { questionManager } from "../src/core/questionManager.ts";
 import { renderQuestionAnswerMessage } from "../src/tui/question-answer-message.ts";
 import { QuestionDock } from "../src/tui/question-dock.ts";
-import { QuestionPanel } from "../src/tui/question-panel.ts";
+import { QuestionPanel } from "../src/tui/panel/question-panel.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const DOCS = join(ROOT, "docs");
