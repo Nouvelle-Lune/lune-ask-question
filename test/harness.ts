@@ -1,0 +1,318 @@
+/**
+ * Shared test harness for lune-ask-question.
+ *
+ * The extension talks to two pi surfaces the tests have to stand in for:
+ * - `pi` through tools, commands, lifecycle events, session entries and messages; and
+ * - `ctx.ui` through the below-editor widget and the question overlay.
+ *
+ * The fakes reproduce only the consumed contract: keyed widgets with placement buckets,
+ * a `custom()` that instantiates the component eagerly so a test can drive it, session
+ * entries appended to a shared branch array, and recorded `sendMessage` calls. The real
+ * TUI is not simulated.
+ */
+import type {
+    ExtensionAPI,
+    ExtensionContext,
+    MessageRenderer,
+    Theme,
+    WidgetPlacement,
+} from "@earendil-works/pi-coding-agent";
+import type { Component, KeybindingsManager, TUI } from "@earendil-works/pi-tui";
+
+export interface WidgetCall {
+    key: string;
+    content: string[] | undefined;
+    placement: WidgetPlacement | undefined;
+}
+
+export interface NotifyCall {
+    message: string;
+    type: string | undefined;
+}
+
+export interface SendMessageCall {
+    message: {
+        customType: string;
+        content: unknown;
+        display: boolean;
+        details: unknown;
+    };
+    options: { triggerTurn?: boolean; deliverAs?: string } | undefined;
+}
+
+export interface AppendEntryCall {
+    customType: string;
+    data: unknown;
+}
+
+export interface CustomCall {
+    overlay: boolean | undefined;
+}
+
+/** One entry of the fake session branch; `restore` reads these. */
+export interface FakeBranchEntry {
+    type: "custom";
+    customType: string;
+    data?: unknown;
+}
+
+export interface FakeUi {
+    readonly notifyCalls: NotifyCall[];
+    readonly widgetCalls: WidgetCall[];
+    readonly customCalls: CustomCall[];
+    readonly theme: Theme;
+    /** Component returned by the latest `custom()` factory, for driving input. */
+    readonly panel: Component | undefined;
+    /** Resolves when the latest `custom()` interaction closes. */
+    readonly panelClosed: Promise<void> | undefined;
+    notify(message: string, type?: string): void;
+    setWidget(key: string, content: string[] | undefined, options?: { placement?: WidgetPlacement }): void;
+    custom<T>(
+        factory: (
+            tui: TUI,
+            theme: Theme,
+            keybindings: KeybindingsManager,
+            done: (result: T) => void,
+        ) => Component & { dispose?(): void },
+        options?: { overlay?: boolean },
+    ): Promise<T>;
+    mountedWidget(placement: WidgetPlacement, key: string): string[] | undefined;
+    mountedKeys(placement: WidgetPlacement): readonly string[];
+}
+
+export function createFakeTui(rows = 40, cols = 120): TUI {
+    return {
+        requestRender: () => undefined,
+        terminal: { rows, cols },
+    } as unknown as TUI;
+}
+
+export function createFakeTheme(): Theme {
+    const identity = (text: string) => text;
+
+    return {
+        fg: (_color: string, text: string) => text,
+        bg: (_color: string, text: string) => text,
+        bold: identity,
+        style: identity,
+        colors: {},
+    } as unknown as Theme;
+}
+
+export function createFakeKeybindings(): KeybindingsManager {
+    return { matches: () => false } as unknown as KeybindingsManager;
+}
+
+export function createFakeUi(): FakeUi {
+    const buckets: Record<WidgetPlacement, Map<string, string[]>> = {
+        aboveEditor: new Map(),
+        belowEditor: new Map(),
+    };
+
+    const notifyCalls: NotifyCall[] = [];
+    const widgetCalls: WidgetCall[] = [];
+    const customCalls: CustomCall[] = [];
+
+    let panel: Component | undefined;
+    let panelClosed: Promise<void> | undefined;
+
+    const ui: FakeUi = {
+        notifyCalls,
+        widgetCalls,
+        customCalls,
+        theme: createFakeTheme(),
+
+        get panel() {
+            return panel;
+        },
+
+        get panelClosed() {
+            return panelClosed;
+        },
+
+        notify(message, type) {
+            notifyCalls.push({ message, type });
+        },
+
+        setWidget(key, content, options) {
+            const placement = options?.placement ?? "aboveEditor";
+            widgetCalls.push({ key, content, placement: options?.placement });
+
+            // pi removes a key from both buckets before inserting, so a repeat call reorders it.
+            buckets.aboveEditor.delete(key);
+            buckets.belowEditor.delete(key);
+
+            if (content !== undefined) {
+                buckets[placement].set(key, content);
+            }
+        },
+
+        custom(factory, options) {
+            customCalls.push({ overlay: options?.overlay });
+
+            let resolve!: (result: unknown) => void;
+            const promise = new Promise<unknown>((res) => {
+                resolve = res;
+            });
+
+            panel = factory(createFakeTui(), createFakeTheme(), createFakeKeybindings(), resolve);
+            panelClosed = promise.then(() => undefined);
+
+            return promise as Promise<never>;
+        },
+
+        mountedWidget(placement, key) {
+            return buckets[placement].get(key);
+        },
+
+        mountedKeys(placement) {
+            return [...buckets[placement].keys()];
+        },
+    };
+
+    return ui;
+}
+
+export interface FakeContextOptions {
+    ui?: FakeUi;
+    mode?: string;
+    hasUI?: boolean;
+    branch?: FakeBranchEntry[];
+}
+
+export function createFakeContext(options: FakeContextOptions = {}): ExtensionContext {
+    return {
+        ui: options.ui ?? createFakeUi(),
+        mode: options.mode ?? "tui",
+        hasUI: options.hasUI ?? true,
+        cwd: "/work",
+        sessionManager: {
+            getBranch: () => options.branch ?? [],
+        },
+        isIdle: () => true,
+        isProjectTrusted: () => true,
+        signal: undefined,
+        abort: () => undefined,
+        hasPendingMessages: () => false,
+        shutdown: () => undefined,
+        getContextUsage: () => undefined,
+        compact: () => undefined,
+        getSystemPrompt: () => "",
+    } as unknown as ExtensionContext;
+}
+
+export type ExtensionHandler = (event: unknown, ctx: ExtensionContext) => unknown;
+
+export interface FakePiHost {
+    readonly api: ExtensionAPI;
+    readonly tools: Map<string, unknown>;
+    readonly commands: Map<string, { description?: string; handler: (args: string, ctx: ExtensionContext) => Promise<void> | void }>;
+    readonly handlers: Map<string, ExtensionHandler[]>;
+    readonly messageRenderers: Map<string, MessageRenderer<unknown>>;
+    readonly sendMessageCalls: SendMessageCall[];
+    readonly appendEntryCalls: AppendEntryCall[];
+    /** Session branch the fake `appendEntry` writes; pass it to `createFakeContext`. */
+    readonly branch: FakeBranchEntry[];
+    fire(event: string, ctx: ExtensionContext): Promise<void>;
+}
+
+export function createFakePiHost(
+    register: (pi: ExtensionAPI) => void,
+    options: { branch?: FakeBranchEntry[] } = {},
+): FakePiHost {
+    const tools = new Map<string, unknown>();
+    const commands = new Map<string, { description?: string; handler: (args: string, ctx: ExtensionContext) => Promise<void> | void }>();
+    const handlers = new Map<string, ExtensionHandler[]>();
+    const messageRenderers = new Map<string, MessageRenderer<unknown>>();
+    const sendMessageCalls: SendMessageCall[] = [];
+    const appendEntryCalls: AppendEntryCall[] = [];
+    const branch = options.branch ?? [];
+
+    const api = {
+        on(event: string, handler: ExtensionHandler) {
+            const list = handlers.get(event) ?? [];
+            list.push(handler);
+            handlers.set(event, list);
+
+            return () => {
+                const index = list.indexOf(handler);
+
+                if (index >= 0) {
+                    list.splice(index, 1);
+                }
+            };
+        },
+
+        registerTool(tool: { name: string }) {
+            tools.set(tool.name, tool);
+        },
+
+        registerCommand(name: string, options: { handler: (args: string, ctx: ExtensionContext) => Promise<void> | void }) {
+            commands.set(name, options);
+        },
+
+        registerMessageRenderer(customType: string, renderer: MessageRenderer<unknown>) {
+            messageRenderers.set(customType, renderer);
+        },
+
+        appendEntry(customType: string, data: unknown) {
+            appendEntryCalls.push({ customType, data });
+            branch.push({ type: "custom", customType, data });
+        },
+
+        sendMessage(message: SendMessageCall["message"], options: SendMessageCall["options"]) {
+            sendMessageCalls.push({ message, options });
+        },
+
+        sendUserMessage() {
+            throw new Error("sendUserMessage is not part of this extension");
+        },
+    } as unknown as ExtensionAPI;
+
+    register(api);
+
+    return {
+        api,
+        tools,
+        commands,
+        handlers,
+        messageRenderers,
+        sendMessageCalls,
+        appendEntryCalls,
+        branch,
+
+        async fire(event, ctx) {
+            for (const handler of handlers.get(event) ?? []) {
+                await handler({ type: event }, ctx);
+            }
+        },
+    };
+}
+
+/** Tool definition with opaque schema types, matching the harness' untyped access. */
+export interface AnyToolDefinition {
+    name: string;
+    description: string;
+    details?: unknown;
+    execute(
+        toolCallId: string,
+        params: unknown,
+        signal: AbortSignal | undefined,
+        onUpdate: undefined,
+        ctx: ExtensionContext,
+    ): Promise<{
+        content: Array<{ type: string; text?: string }>;
+        details: unknown;
+        isError?: boolean;
+    }>;
+}
+
+export function requireTool(host: FakePiHost, name: string): AnyToolDefinition {
+    const tool = host.tools.get(name);
+
+    if (!tool) {
+        throw new Error(`tool not registered: ${name}`);
+    }
+
+    return tool as AnyToolDefinition;
+}
