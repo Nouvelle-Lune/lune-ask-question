@@ -110,7 +110,7 @@ describe("question panel", () => {
             assert.match(text, /server/);
             assert.match(text, /2\. SQLite/);
             assert.match(text, /Type something/);
-            assert.match(text, /s skip/);
+            assert.match(text, /S skip/);
             assert.match(text, /Esc close/);
         });
 
@@ -749,21 +749,21 @@ describe("question panel", () => {
             );
         });
 
-        it("treats digits, j/k and space as text on the custom row", () => {
+        it("treats s, digits, j/k and space as text on the custom row", () => {
             const { panel, request } = createFixture(OPTION_QUESTIONS);
 
             panel.handleInput(UP);
-            type(panel, "2j ");
+            type(panel, "s2j ");
 
             assert.equal(request.status, "pending", "a printable key on the custom row starts the answer");
-            assert.equal(request.draft.customDrafts[0], "2j ");
+            assert.equal(request.draft.customDrafts[0], "s2j ");
         });
 
-        it("skips from the custom row with s", () => {
+        it("skips from the custom row with Shift+S", () => {
             const { panel, request, counts } = createFixture(OPTION_QUESTIONS);
 
             panel.handleInput(UP);
-            panel.handleInput("s");
+            panel.handleInput("S");
 
             assert.equal(request.status, "skipped");
             assert.equal(counts.closed, 1);
@@ -885,7 +885,7 @@ describe("question panel", () => {
             assert.equal(answered.counts.reason, "settled");
 
             const skipped = createFixture(OPTION_QUESTIONS);
-            skipped.panel.handleInput("s");
+            skipped.panel.handleInput("S");
             assert.equal(skipped.counts.reason, "settled");
 
             const deferred = createFixture(OPTION_QUESTIONS);
@@ -893,10 +893,10 @@ describe("question panel", () => {
             assert.equal(deferred.counts.reason, "deferred");
         });
 
-        it("skips the whole request with s", () => {
+        it("skips the whole request with Shift+S", () => {
             const { panel, request, counts } = createFixture(OPTION_QUESTIONS);
 
-            panel.handleInput("s");
+            panel.handleInput("S");
 
             assert.equal(request.status, "skipped");
             assert.equal(request.answers, undefined);
@@ -904,33 +904,42 @@ describe("question panel", () => {
             assert.equal(counts.deferred, 0);
         });
 
-        it("treats the s key as text while the editor is open", () => {
+        it("leaves a plain s to the text it belongs to", () => {
+            const { panel, request, counts } = createFixture(OPTION_QUESTIONS);
+
+            panel.handleInput("s");
+
+            assert.equal(request.status, "pending", "skip is Shift+S, so a plain s is not a shortcut");
+            assert.equal(counts.closed, 0);
+        });
+
+        it("keeps s and S as text while the editor is open", () => {
             const { panel, request, counts } = createFixture([{ question: "Name the service?" }]);
 
-            type(panel, "is");
+            type(panel, "isS");
             panel.handleInput(ENTER);
 
-            assert.deepEqual(request.answers, [{ selectedIndexes: [], customText: "is" }]);
+            assert.deepEqual(request.answers, [{ selectedIndexes: [], customText: "isS" }]);
             assert.equal(counts.closed, 1);
         });
 
         it("skips a free-form question after leaving its editor", () => {
             const { panel, request, counts } = createFixture([{ question: "Name the service?" }]);
 
-            // A free-form question opens the editor itself, so `s` has to stay reachable
+            // A free-form question opens the editor itself, so Shift+S has to stay reachable
             // through Esc instead of being a key the user can never press.
             assert.match(renderText(panel), /Your answer:/);
 
             panel.handleInput(ESCAPE);
             assert.equal(renderText(panel).includes("Your answer:"), false, "the first Esc leaves the editor");
 
-            panel.handleInput("s");
+            panel.handleInput("S");
 
             assert.equal(request.status, "skipped");
             assert.equal(counts.closed, 1);
         });
 
-        it("does not advertise s while the editor owns the key", () => {
+        it("does not advertise skip while the editor owns the keys", () => {
             const { panel } = createFixture(OPTION_QUESTIONS);
 
             panel.handleInput(UP);
@@ -939,7 +948,32 @@ describe("question panel", () => {
             const footer = innerLines(panel).at(-1)!;
 
             assert.match(footer, /Esc back to options/);
-            assert.equal(footer.includes("s skip"), false, "the editor turns s into text");
+            assert.equal(footer.includes("S skip"), false, "the editor turns S into text");
+        });
+
+        it("closes on Esc even when the deferred save throws", () => {
+            const request = questionManager.create(OPTION_QUESTIONS);
+            const counts: { closed: number; reason: string | undefined } = { closed: 0, reason: undefined };
+
+            const panel = new QuestionPanel({
+                request,
+                tui: createFakeTui(),
+                theme: createFakeTheme(),
+                keybindings: createFakeKeybindings(),
+                close: (reason) => {
+                    counts.closed++;
+                    counts.reason = reason;
+                },
+                onDeferred: () => {
+                    throw new Error("session is read-only");
+                },
+            });
+
+            panel.handleInput(ESCAPE);
+
+            assert.equal(counts.closed, 1, "the overlay must not be left stuck on screen");
+            assert.equal(counts.reason, "deferred");
+            assert.equal(request.status, "pending", "the request stays pending either way");
         });
     });
 });

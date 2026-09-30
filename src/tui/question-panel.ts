@@ -272,9 +272,10 @@ export class QuestionPanel implements Component, Focusable {
             return;
         }
 
-        // Skip is checked before the custom-row shortcut so a free-form question, whose
-        // editor opens by itself, stays skippable: Esc leaves the editor, then `s` skips.
-        if (data === "s") {
+        // Skip is Shift+S, and it is checked before the custom-row shortcut: a free-form
+        // question opens its editor by itself, so Esc has to leave a key that still skips,
+        // while a plain `s` stays the letter it is everywhere else - the start of an answer.
+        if (data === "S") {
             this.skipRequest();
             return;
         }
@@ -660,9 +661,15 @@ export class QuestionPanel implements Component, Focusable {
             this.captureEditorDraft();
         }
 
-        // The draft is already on the request, so only the snapshot has to be written.
-        this.onDeferred?.();
-        this.close("deferred");
+        try {
+            // The draft is already on the request, so only the snapshot has to be written.
+            this.onDeferred?.();
+        } catch {
+            // A hook failure must not leave the overlay stuck, and it must not reach the
+            // terminal input loop either - the hook reports its own errors.
+        } finally {
+            this.close("deferred");
+        }
     }
 
     private isConfirmKey(data: string): boolean {
@@ -715,15 +722,15 @@ export class QuestionPanel implements Component, Focusable {
         let hints: string;
 
         if (this.inputMode) {
-            // `s` belongs to the editor while it owns the keys, so the footer must not
+            // Shift+S belongs to the editor while it owns the keys, so the footer must not
             // advertise skip here; Esc leaves the editor and skips from the options.
             hints = "Enter submit · Esc back to options";
         } else if (this.isSubmitTab) {
-            hints = `${this.isMultiQuestion ? "Tab/←→ switch · " : ""}Enter submit · s skip · Esc close`;
+            hints = `${this.isMultiQuestion ? "Tab/←→ switch · " : ""}Enter submit · S skip · Esc close`;
         } else if (question?.multiSelect === true) {
-            hints = "↑↓ move · Space/Enter toggle · Tab next · s skip · Esc close";
+            hints = "↑↓ move · Space/Enter toggle · Tab next · S skip · Esc close";
         } else {
-            hints = `↑↓ select · Enter confirm${this.isMultiQuestion ? " · Tab/←→ switch" : ""} · s skip · Esc close`;
+            hints = `↑↓ select · Enter confirm${this.isMultiQuestion ? " · Tab/←→ switch" : ""} · S skip · Esc close`;
         }
 
         return this.cell(this.theme.fg("dim", hints), width);

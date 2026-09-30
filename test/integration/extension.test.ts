@@ -258,7 +258,7 @@ describe("lune-ask-question extension", () => {
             const ctx = createFakeContext({ ui, branch: host.branch });
 
             await tool.execute("call-1", { questions: QUESTIONS }, undefined, undefined, ctx);
-            ui.panel!.handleInput?.("s");
+            ui.panel!.handleInput?.("S");
 
             assert.equal(host.sendMessageCalls.length, 1);
             assert.match(String(host.sendMessageCalls[0]!.message.content), /skipped these questions/);
@@ -271,7 +271,7 @@ describe("lune-ask-question extension", () => {
 
             // A second settle attempt (a key landing while the panel closes) must not deliver again.
             ui.panel!.handleInput?.(ENTER);
-            ui.panel!.handleInput?.("s");
+            ui.panel!.handleInput?.("S");
 
             assert.equal(host.sendMessageCalls.length, 1);
             assert.equal((host.sendMessageCalls[0]!.message.details as { status: string }).status, "answered");
@@ -652,6 +652,50 @@ describe("lune-ask-question extension", () => {
             await ask(host, ui, QUESTIONS, "call-1");
 
             assert.ok(ui.panel, "the question is still askable");
+            assert.ok(
+                ui.notifyCalls.some((call) => call.type === "error" && /could not be saved/.test(call.message)),
+                `expected a snapshot error notice, got ${JSON.stringify(ui.notifyCalls)}`,
+            );
+        });
+
+        it("closes the deferred overlay when the snapshot cannot be written", async () => {
+            const { host, ui } = await startSession();
+
+            await ask(host, ui, QUESTIONS, "call-1");
+
+            host.api.appendEntry = () => {
+                throw new Error("session is read-only");
+            };
+
+            ui.panel!.handleInput?.("\x1b");
+            await drain();
+
+            assert.ok(
+                ui.notifyCalls.some((call) => call.type === "error" && /could not be saved/.test(call.message)),
+                `expected a snapshot error notice, got ${JSON.stringify(ui.notifyCalls)}`,
+            );
+            assert.equal(questionManager.getPendingRequests().length, 1, "the request stays pending");
+            assert.equal(ui.customCalls.length, 1, "a defer is quiet");
+
+            // The overlay released its ownership instead of sticking on screen.
+            void host.commands.get("question")!.handler("", createFakeContext({ ui, branch: host.branch }));
+
+            assert.equal(ui.customCalls.length, 2, "/question can open the deferred request again");
+        });
+
+        it("finishes shutdown when the final snapshot cannot be written", async () => {
+            const { host, ui, branch } = await startSession();
+
+            await ask(host, ui, QUESTIONS, "call-1");
+
+            host.api.appendEntry = () => {
+                throw new Error("session is read-only");
+            };
+
+            await host.fire("session_shutdown", createFakeContext({ ui, branch }));
+
+            assert.equal(questionManager.getPendingRequests().length, 0, "shutdown still clears the state");
+            assert.equal(ui.mountedWidget("belowEditor", WIDGET_KEY), undefined, "and the dock");
             assert.ok(
                 ui.notifyCalls.some((call) => call.type === "error" && /could not be saved/.test(call.message)),
                 `expected a snapshot error notice, got ${JSON.stringify(ui.notifyCalls)}`,

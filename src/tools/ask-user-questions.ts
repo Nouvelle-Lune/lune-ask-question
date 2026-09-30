@@ -1,4 +1,4 @@
-import { defineTool } from "@earendil-works/pi-coding-agent";
+import { defineTool, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { Text } from "@earendil-works/pi-tui";
 
@@ -24,7 +24,7 @@ export type AskUserQuestionsDetails =
  * `persist` writes the pending questions (with drafts) into the session, which is what
  * keeps them answerable after Esc or a restart.
  */
-export function askUserQuestions(persist: () => void) {
+export function askUserQuestions(persist: (ctx: ExtensionContext) => void) {
     return defineTool({
         name: "ask_user_questions",
         label: "Ask User Questions",
@@ -64,7 +64,7 @@ export function askUserQuestions(persist: () => void) {
 
             // Not awaited: the tool result is what lets the model keep working while the
             // user reads the panel.
-            void openQuestionPanel(ctx, { onDeferred: persist });
+            void openQuestionPanel(ctx, { onDeferred: () => persist(ctx) });
 
             return {
                 content: [

@@ -1,10 +1,10 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { questionManager } from "../core/questionManager.ts";
 import { openQuestionPanel } from "../tui/question-panel.ts";
 
 /** Reopen the panel after Esc closed it, without having to ask the model again. */
-export function registerQuestionCommand(pi: ExtensionAPI): void {
+export function registerQuestionCommand(pi: ExtensionAPI, persist: (ctx: ExtensionContext) => void): void {
     pi.registerCommand("question", {
         description: "Open the pending question panel",
         handler: async (_args, ctx) => {
@@ -19,7 +19,7 @@ export function registerQuestionCommand(pi: ExtensionAPI): void {
             }
 
             await openQuestionPanel(ctx, {
-                onDeferred: () => questionManager.persist(pi),
+                onDeferred: () => persist(ctx),
             });
         },
     });

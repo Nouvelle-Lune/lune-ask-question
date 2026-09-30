@@ -3,7 +3,7 @@
  *
  * Loaded as `pi -e test/tui/scripted-provider.ts -e src/index.ts`, it queues two responses:
  * one `ask_user_questions` call and one closing line. Nothing below the model is mocked - the
- * tool runs for real, opens the overlay through `ctx.ui.custom`, and the user's answer (or `s`)
+ * tool runs for real, opens the overlay through `ctx.ui.custom`, and the user's answer (or `S`)
  * comes back as the extension's follow-up message, which is what produces the second turn.
  *
  * With `LAQ_DEMO=two` the first response carries two tool calls instead, so a second request is

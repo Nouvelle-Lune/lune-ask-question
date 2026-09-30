@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { registerQuestionCommand } from "./commands/question.ts";
 import { ASK_QUESTION_ANSWER_MESSAGE, registerQuestionAnswerNotifications } from "./core/question-notification.ts";
@@ -12,7 +12,24 @@ import { questionDock } from "./tui/question-dock.ts";
 import { resetQuestionPanelState } from "./tui/question-panel.ts";
 
 export default function (pi: ExtensionAPI): void {
-    const persist = () => questionManager.persist(pi);
+    /**
+     * Write the pending questions, and report a failure instead of throwing it.
+     *
+     * Everything that persists does a lifecycle step right after - the overlay closes, the
+     * session shuts down, the branch switches - and a throw from `appendEntry` would leave
+     * that step half done. The user still has to learn that the state will not survive a
+     * restart, so the failure is shown rather than dropped.
+     */
+    const persist = (ctx: ExtensionContext): void => {
+        try {
+            questionManager.persist(pi);
+        } catch (error) {
+            ctx.ui.notify(
+                `Question state could not be saved: ${error instanceof Error ? error.message : String(error)}`,
+                "error",
+            );
+        }
+    };
 
     let unsubscribeManager: (() => void) | undefined;
     let unsubscribeNotifications: (() => void) | undefined;
@@ -36,7 +53,7 @@ export default function (pi: ExtensionAPI): void {
                     // writing an empty snapshot there would shadow the pending questions of
                     // the branch being restored.
                     if (event.type !== "requests-cleared") {
-                        persist();
+                        persist(ctx);
                     }
                 } finally {
                     // A snapshot that failed must not also leave the dock showing stale order.
@@ -44,8 +61,10 @@ export default function (pi: ExtensionAPI): void {
                 }
             },
             (error) => {
+                // Persistence reports its own failures; this is for a listener that threw for
+                // another reason, such as the dock render.
                 ctx.ui.notify(
-                    `Question state could not be saved: ${error instanceof Error ? error.message : String(error)}`,
+                    `Question dock could not be updated: ${error instanceof Error ? error.message : String(error)}`,
                     "error",
                 );
             },
@@ -66,9 +85,9 @@ export default function (pi: ExtensionAPI): void {
         questionDock.render();
     });
 
-    pi.on("session_shutdown", () => {
+    pi.on("session_shutdown", (_event, ctx) => {
         // Drafts change without a manager event, so the final snapshot is written here.
-        persist();
+        persist(ctx);
         unsubscribeManager?.();
         unsubscribeManager = undefined;
         unsubscribeNotifications?.();
@@ -77,8 +96,8 @@ export default function (pi: ExtensionAPI): void {
         questionManager.clearAll();
     });
 
-    pi.on("session_before_tree", () => {
-        persist();
+    pi.on("session_before_tree", (_event, ctx) => {
+        persist(ctx);
     });
 
     pi.on("session_tree", (_event, ctx) => {
@@ -91,7 +110,7 @@ export default function (pi: ExtensionAPI): void {
     });
 
     pi.registerTool(askUserQuestions(persist));
-    registerQuestionCommand(pi);
+    registerQuestionCommand(pi, persist);
 
     pi.registerMessageRenderer<AskQuestionAnswerMessageDetails>(
         ASK_QUESTION_ANSWER_MESSAGE,

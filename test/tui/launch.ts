@@ -27,7 +27,7 @@ What to watch for:
    row appears while the model answers "questions settled";
 4. with the panel open instead: Esc closes it and leaves "1 pending question · ... ·
    /question to answer" below the editor, /question reopens it with the same focus and draft,
-   and s skips the whole request - the model then reports it was skipped.
+   and Shift+S skips the whole request - the model then reports it was skipped.
 
 pi loads the extensions and stays interactive; quit it with Ctrl+D, Ctrl+C or /quit.
 
