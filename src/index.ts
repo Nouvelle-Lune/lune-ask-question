@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { registerQuestionCommand } from "./commands/question.ts";
+import { reconcileQuestionDeliveries } from "./core/question-delivery.ts";
 import { ASK_QUESTION_ANSWER_MESSAGE, registerQuestionAnswerNotifications } from "./core/question-notification.ts";
 import { questionManager } from "./core/questionManager.ts";
 import { askUserQuestions } from "./tools/ask-user-questions.ts";
@@ -13,7 +14,7 @@ import { resetQuestionPanelState } from "./tui/panel/question-panel.ts";
 
 export default function (pi: ExtensionAPI): void {
     /**
-     * Write the pending questions, and report a failure instead of throwing it.
+     * Write the question state, and report a failure instead of throwing it.
      *
      * Everything that persists does a lifecycle step right after - the overlay closes, the
      * session shuts down, the branch switches - and a throw from `appendEntry` would leave
@@ -34,6 +35,14 @@ export default function (pi: ExtensionAPI): void {
     let unsubscribeManager: (() => void) | undefined;
     let unsubscribeNotifications: (() => void) | undefined;
 
+    /** Report a delivery attempt that pi rejected synchronously; the outbox keeps the request. */
+    const reportDeliveryFailure = (ctx: ExtensionContext, error: unknown): void => {
+        ctx.ui.notify(
+            `Question answers could not be delivered: ${error instanceof Error ? error.message : String(error)}`,
+            "error",
+        );
+    };
+
     pi.on("session_start", (_event, ctx) => {
         // The previous session's listeners close over its ctx and a duplicate subscription
         // would render and persist twice per event, so they go first - before the state
@@ -44,7 +53,7 @@ export default function (pi: ExtensionAPI): void {
         unsubscribeNotifications = undefined;
 
         // Module state may survive extension reloads, so a session starts from its own
-        // branch: clear first, then restore the pending questions recorded there.
+        // branch: clear first, then restore the question state recorded there.
         resetQuestionPanelState();
         questionManager.clearAll();
         questionDock.setCtx(ctx);
@@ -77,12 +86,14 @@ export default function (pi: ExtensionAPI): void {
         // Registered after the persist listener: the snapshot has to exist before the
         // answer message resumes the model.
         unsubscribeNotifications = registerQuestionAnswerNotifications(pi, {
-            onError: (error) => {
-                ctx.ui.notify(
-                    `Question answers could not be delivered: ${error instanceof Error ? error.message : String(error)}`,
-                    "error",
-                );
-            },
+            onError: (error) => reportDeliveryFailure(ctx, error),
+        });
+
+        // A session can start with settled answers whose message never reached the previous
+        // one; the outbox is durable, so reconcile it against this branch. Confirmed answers
+        // are released (and persisted), the rest are attempted again.
+        reconcileQuestionDeliveries(pi, ctx, {
+            onError: (error) => reportDeliveryFailure(ctx, error),
         });
 
         questionDock.render();
@@ -109,6 +120,13 @@ export default function (pi: ExtensionAPI): void {
         resetQuestionPanelState();
         questionManager.clearAll();
         questionManager.restore(ctx);
+
+        // Reconciliation reads the branch that is active now, never the one being left:
+        // branch A's undelivered answers must not be sent into branch B.
+        reconcileQuestionDeliveries(pi, ctx, {
+            onError: (error) => reportDeliveryFailure(ctx, error),
+        });
+
         questionDock.render();
     });
 

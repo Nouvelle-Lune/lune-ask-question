@@ -17,7 +17,13 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 
 import luneAskQuestion from "../../src/index.ts";
-import { QUESTION_STATE_ENTRY, QUESTION_STATE_VERSION, questionManager, type AskQuestion } from "../../src/core/questionManager.ts";
+import {
+    QUESTION_STATE_ENTRY,
+    QUESTION_STATE_VERSION,
+    questionManager,
+    type AskQuestion,
+    type AskQuestionAnswer,
+} from "../../src/core/questionManager.ts";
 import { ASK_QUESTION_ANSWER_MESSAGE } from "../../src/core/question-notification.ts";
 import { resetQuestionPanelState } from "../../src/tui/panel/question-panel.ts";
 import {
@@ -27,8 +33,10 @@ import {
     createFakeUi,
     requireTool,
     type FakeBranchEntry,
+    type FakeCommittedMessageEntry,
     type FakePiHost,
     type FakeUi,
+    type SendMessageCall,
 } from "../harness.ts";
 
 const WIDGET_KEY = "lune-ask-question";
@@ -111,6 +119,142 @@ async function drain(): Promise<void> {
     for (let hop = 0; hop < 5; hop++) {
         await new Promise((resolve) => setImmediate(resolve));
     }
+}
+
+/** The request a recorded delivery attempt carries; the id is the delivery correlation key. */
+function attemptedRequestId(call: SendMessageCall): string | undefined {
+    const details = call.message.details as { requestId?: unknown } | undefined;
+
+    return typeof details?.requestId === "string" ? details.requestId : undefined;
+}
+
+/** Delivery attempts recorded for one request. */
+function deliveryAttempts(host: FakePiHost, requestId: string): SendMessageCall[] {
+    return host.sendMessageCalls.filter((call) => attemptedRequestId(call) === requestId);
+}
+
+/** Commit the attempt for `requestId` into the fake session, as pi does once it accepts it. */
+function commitAnswer(host: FakePiHost, requestId: string): void {
+    const index = host.sendMessageCalls.findIndex((call) => attemptedRequestId(call) === requestId);
+
+    assert.notEqual(index, -1, `expected a delivery attempt for ${requestId}`);
+    host.commitSendMessage(index);
+}
+
+/** Answer messages the session branch holds for one request, matched by its stable identity. */
+function committedAnswers(entries: readonly FakeBranchEntry[], requestId: string): FakeCommittedMessageEntry[] {
+    return entries.filter(
+        (entry): entry is FakeCommittedMessageEntry =>
+            entry.type === "custom_message"
+            && entry.customType === ASK_QUESTION_ANSWER_MESSAGE
+            && (entry.details as { requestId?: unknown } | undefined)?.requestId === requestId,
+    );
+}
+
+/** Shut a session down and start a new one over the same branch, as quitting and resuming pi does. */
+async function restart(session: Session): Promise<Session> {
+    await session.host.fire(
+        "session_shutdown",
+        createFakeContext({ ui: session.ui, branch: session.host.branch }),
+    );
+
+    return startSession(session.host.branch);
+}
+
+/** Move the fake session to another branch, as pi does on a tree jump. */
+async function switchBranch(session: Session, next: FakeBranchEntry[]): Promise<void> {
+    const previous = session.host.branch;
+
+    await session.host.fire("session_before_tree", createFakeContext({ ui: session.ui, branch: previous }));
+    session.host.activateBranch(next);
+    await session.host.fire("session_tree", createFakeContext({ ui: session.ui, branch: next }));
+}
+
+/** Answers the plugin still keeps durably for `requestId`, if any. */
+function durableAnswers(entries: readonly FakeBranchEntry[], requestId: string): AskQuestionAnswer[] | undefined {
+    // Only the newest entry of each kind counts, matching how the plugin restores state: an
+    // older snapshot still holding the answer must not mask a newer one that dropped it.
+    const newestByType = new Map<string, unknown>();
+
+    for (const entry of entries) {
+        if (entry.type === "custom") {
+            newestByType.set(entry.customType, entry.data);
+        }
+    }
+
+    for (const data of newestByType.values()) {
+        const answers = findAnswers(data, requestId);
+
+        if (answers) {
+            return answers;
+        }
+    }
+
+    return undefined;
+}
+
+/**
+ * Find settled answers for `requestId` in one durable value.
+ *
+ * The shape is deliberately open: a snapshot entry, an outbox record, a collection keyed by
+ * request id or an answered-request array all qualify. A draft must not: an answer is only
+ * durable when the settled payload carries it, not while the user is still editing.
+ */
+function findAnswers(value: unknown, requestId: string): AskQuestionAnswer[] | undefined {
+    if (Array.isArray(value)) {
+        for (const item of value) {
+            const found = findAnswers(item, requestId);
+
+            if (found) {
+                return found;
+            }
+        }
+
+        return undefined;
+    }
+
+    if (value === null || typeof value !== "object") {
+        return undefined;
+    }
+
+    const record = value as Record<string, unknown>;
+
+    if (record.id === requestId || record.requestId === requestId) {
+        const answers = settledAnswers(record);
+
+        if (answers) {
+            return answers;
+        }
+    }
+
+    const keyed = record[requestId];
+
+    if (keyed !== null && typeof keyed === "object") {
+        const answers = settledAnswers(keyed as Record<string, unknown>);
+
+        if (answers) {
+            return answers;
+        }
+    }
+
+    for (const child of Object.values(record)) {
+        const found = findAnswers(child, requestId);
+
+        if (found) {
+            return found;
+        }
+    }
+
+    return undefined;
+}
+
+/** The settled answers of one record, if it carries any; a pending record's draft does not count. */
+function settledAnswers(record: Record<string, unknown>): AskQuestionAnswer[] | undefined {
+    if (record.status === "pending" || !Array.isArray(record.answers)) {
+        return undefined;
+    }
+
+    return record.answers as AskQuestionAnswer[];
 }
 
 describe("lune-ask-question extension", () => {
@@ -213,7 +357,7 @@ describe("lune-ask-question extension", () => {
     });
 
     describe("answer delivery", () => {
-        it("delivers the answers as a follow-up message that steers the model", async () => {
+        it("attempts delivery of the answers as a follow-up message that steers the model", async () => {
             const { host, ui } = await startSession();
             const tool = requireTool(host, "ask_user_questions");
             const ctx = createFakeContext({ ui, branch: host.branch });
@@ -273,7 +417,7 @@ describe("lune-ask-question extension", () => {
             assert.deepEqual((call.message.details as { answers: unknown[] }).answers, [{ selectedIndexes: [0] }]);
         });
 
-        it("delivers a skip as a follow-up message", async () => {
+        it("attempts delivery of a skip as a follow-up message", async () => {
             const { host, ui } = await startSession();
             const tool = requireTool(host, "ask_user_questions");
             const ctx = createFakeContext({ ui, branch: host.branch });
@@ -285,7 +429,7 @@ describe("lune-ask-question extension", () => {
             assert.match(String(host.sendMessageCalls[0]!.message.content), /skipped these questions/);
         });
 
-        it("delivers a settled answer exactly once", async () => {
+        it("attempts delivery of a settled answer exactly once", async () => {
             const { host, ui } = await startSession();
 
             await ask(host, ui, QUESTIONS, "call-1");
@@ -298,13 +442,14 @@ describe("lune-ask-question extension", () => {
             assert.equal((host.sendMessageCalls[0]!.message.details as { status: string }).status, "answered");
         });
 
-        it("keeps a settled answer when the delivery throws, and says so", async () => {
+        it("attempts to deliver a settled answer, and reports a delivery that throws", async () => {
             const { host, ui } = await startSession();
 
             await ask(host, ui, QUESTIONS, "call-1");
 
             // pi rejects the call (for example while it is switching sessions): the answer must
-            // still be settled and persisted, and the user must learn it never arrived.
+            // still be settled, and the user must learn it never arrived. That the answer also
+            // stays durable until a confirmed delivery is covered by `durable answer delivery`.
             host.api.sendMessage = () => {
                 throw new Error("session not owned");
             };
@@ -313,18 +458,13 @@ describe("lune-ask-question extension", () => {
             await ui.panelClosed;
 
             assert.equal(questionManager.getPendingRequests().length, 0);
-            assert.equal(
-                (host.appendEntryCalls.at(-1)!.data as { requests: unknown[] }).requests.length,
-                0,
-                "the settled state is persisted",
-            );
             assert.ok(
                 ui.notifyCalls.some((call) => call.type === "error" && /could not be delivered/.test(call.message)),
                 `expected a delivery error notice, got ${JSON.stringify(ui.notifyCalls)}`,
             );
         });
 
-        it("persists the settled state so the answered request cannot come back", async () => {
+        it("keeps the answered request out of the pending queue", async () => {
             const { host, ui } = await startSession();
             const tool = requireTool(host, "ask_user_questions");
             const ctx = createFakeContext({ ui, branch: host.branch });
@@ -332,8 +472,291 @@ describe("lune-ask-question extension", () => {
             await tool.execute("call-1", { questions: QUESTIONS }, undefined, undefined, ctx);
             answerFocusedOption(ui);
 
-            const last = host.appendEntryCalls.filter((call) => call.customType === QUESTION_STATE_ENTRY).at(-1);
-            assert.equal((last!.data as { requests: unknown[] }).requests.length, 0);
+            assert.equal(questionManager.getPendingRequests().length, 0);
+            assert.equal(questionManager.nextPendingRequest(), undefined);
+        });
+    });
+
+    /**
+     * Durable answer delivery contract.
+     *
+     * Three facts have to stay distinct:
+     *
+     * 1. pending - the user has not answered; the request belongs to the panel, `/question`,
+     *    the pending dock and `nextPendingRequest()`.
+     * 2. answered but undelivered - the user answered; the settled payload (requestId,
+     *    questions, answers) stays recoverable from durable plugin state after `sendMessage`
+     *    was only attempted, because a call is not a delivery.
+     * 3. delivered - a `custom_message` entry with `customType === ASK_QUESTION_ANSWER_MESSAGE`
+     *    and `details.requestId === request.id` is in the session branch; only then may the
+     *    durable answer copy be released.
+     *
+     * The fake host keeps `sendMessageCalls` (attempts) and `committedMessages` (session
+     * content) separate; a test acknowledges a delivery by committing one of its attempts.
+     * Reconciliation is triggered through the lifecycle events that re-read the branch today,
+     * `session_start` and `session_tree`: a committed message must release the durable answer
+     * and never be delivered twice, an uncommitted one must be retried after a restore, and
+     * the retry has to be matched by requestId rather than message order or recency.
+     */
+    describe("durable answer delivery", () => {
+        const SECOND: AskQuestion[] = [
+            { header: "Port", question: "Which port?", options: [{ label: "8080" }, { label: "9090" }] },
+        ];
+
+        it("keeps an answered request durable until delivery is acknowledged", async () => {
+            const { host, ui } = await startSession();
+
+            await ask(host, ui, QUESTIONS, "call-1");
+            const requestId = questionManager.getPendingRequests()[0]!.id;
+
+            const sendMessage = host.api.sendMessage;
+            let durableAtAttempt: AskQuestionAnswer[] | undefined;
+
+            // Capture durability at the moment the plugin reaches for pi: the write has to
+            // happen before the attempt, not after the answer is handed over.
+            host.api.sendMessage = (message, options) => {
+                durableAtAttempt = durableAnswers(host.branch, requestId);
+                sendMessage(message, options);
+            };
+
+            answerFocusedOption(ui);
+
+            assert.deepEqual(durableAtAttempt, [{ selectedIndexes: [0] }], "the answer is durable before the attempt");
+            assert.deepEqual(
+                durableAnswers(host.branch, requestId),
+                [{ selectedIndexes: [0] }],
+                "and it stays durable while the delivery is unacknowledged",
+            );
+            assert.equal(questionManager.getPendingRequests().length, 0, "the request is settled, not pending");
+        });
+
+        it("does not treat a sendMessage call as a delivery acknowledgement", async () => {
+            const { host, ui } = await startSession();
+
+            await ask(host, ui, QUESTIONS, "call-1");
+            const requestId = questionManager.getPendingRequests()[0]!.id;
+            answerFocusedOption(ui);
+
+            assert.equal(deliveryAttempts(host, requestId).length, 1, "the extension asked pi to deliver");
+            assert.equal(host.committedMessages.length, 0, "but pi never accepted the message");
+            assert.deepEqual(
+                durableAnswers(host.branch, requestId),
+                [{ selectedIndexes: [0] }],
+                "so the answer is not the plugin's to drop yet",
+            );
+        });
+
+        it("releases the durable answer only after the matching message is committed", async () => {
+            const { host, ui } = await startSession();
+
+            await ask(host, ui, QUESTIONS, "call-1");
+            const requestId = questionManager.getPendingRequests()[0]!.id;
+            answerFocusedOption(ui);
+
+            assert.deepEqual(
+                durableAnswers(host.branch, requestId),
+                [{ selectedIndexes: [0] }],
+                "held while the attempt is unacknowledged",
+            );
+            assert.equal(host.committedMessages.length, 0);
+
+            commitAnswer(host, requestId);
+
+            // The branch now carries the message; re-reading it must mark the answer delivered.
+            await host.fire("session_tree", createFakeContext({ ui, branch: host.branch }));
+
+            assert.equal(durableAnswers(host.branch, requestId), undefined, "the acknowledged answer may be released");
+            assert.equal(deliveryAttempts(host, requestId).length, 1, "and is not sent a second time");
+            assert.equal(questionManager.getPendingRequests().length, 0, "delivered is not pending");
+        });
+
+        it("restores an answered-but-undelivered request without reopening the question", async () => {
+            const branch: FakeBranchEntry[] = [];
+            const first = await startSession(branch);
+
+            await ask(first.host, first.ui, QUESTIONS, "call-1");
+            const requestId = questionManager.getPendingRequests()[0]!.id;
+            answerFocusedOption(first.ui);
+
+            const second = await restart(first);
+
+            assert.deepEqual(durableAnswers(branch, requestId), [{ selectedIndexes: [0] }], "the answers survived");
+            assert.equal(questionManager.getPendingRequests().length, 0, "the user is not asked again");
+            assert.equal(questionManager.nextPendingRequest(), undefined);
+            assert.equal(second.ui.mountedWidget("belowEditor", WIDGET_KEY), undefined, "the dock stays quiet");
+
+            await second.host.commands.get("question")!.handler(
+                "",
+                createFakeContext({ ui: second.ui, branch }),
+            );
+
+            assert.deepEqual(second.ui.notifyCalls, [{ message: "No pending questions", type: "info" }]);
+            assert.equal(second.ui.customCalls.length, 0, "and no panel reopens");
+        });
+
+        it("retries an unacknowledged answer after a restore", async () => {
+            const branch: FakeBranchEntry[] = [];
+            const first = await startSession(branch);
+
+            await ask(first.host, first.ui, QUESTIONS, "call-1");
+            const requestId = questionManager.getPendingRequests()[0]!.id;
+            answerFocusedOption(first.ui);
+
+            assert.equal(deliveryAttempts(first.host, requestId).length, 1, "the first attempt is made");
+            assert.equal(first.host.committedMessages.length, 0, "and never accepted");
+
+            const second = await restart(first);
+            const retries = deliveryAttempts(second.host, requestId);
+
+            assert.equal(retries.length, 1, "restoring a durable answer with no committed message retries it");
+            assert.equal(retries[0]!.message.customType, ASK_QUESTION_ANSWER_MESSAGE, "as the same kind of message");
+            assert.deepEqual(
+                (retries[0]!.message.details as { answers: unknown }).answers,
+                [{ selectedIndexes: [0] }],
+                "with the same answers under the same requestId",
+            );
+            assert.equal(questionManager.getPendingRequests().length, 0, "without reopening the question");
+        });
+
+        it("keeps a skipped request durable and retries it after a restore", async () => {
+            const branch: FakeBranchEntry[] = [];
+            const first = await startSession(branch);
+
+            await ask(first.host, first.ui, QUESTIONS, "call-1");
+            const requestId = questionManager.getPendingRequests()[0]!.id;
+            first.ui.panel!.handleInput?.("S");
+
+            assert.equal(deliveryAttempts(first.host, requestId).length, 1, "the skip is attempted");
+            assert.equal(questionManager.getPendingRequests().length, 0, "the skip is settled, not pending");
+
+            const second = await restart(first);
+            const retries = deliveryAttempts(second.host, requestId);
+
+            assert.equal(retries.length, 1, "a skip takes the same durable path as an answer");
+            assert.equal((retries[0]!.message.details as { status: unknown }).status, "skipped");
+            assert.match(String(retries[0]!.message.content), /skipped these questions/);
+            assert.equal(questionManager.getPendingRequests().length, 0, "without reopening the question");
+        });
+
+        it("does not redeliver an answer already committed to the session", async () => {
+            const branch: FakeBranchEntry[] = [];
+            const first = await startSession(branch);
+
+            await ask(first.host, first.ui, QUESTIONS, "call-1");
+            const requestId = questionManager.getPendingRequests()[0]!.id;
+            answerFocusedOption(first.ui);
+
+            assert.deepEqual(
+                durableAnswers(branch, requestId),
+                [{ selectedIndexes: [0] }],
+                "the answer is durable before the ack",
+            );
+            commitAnswer(first.host, requestId);
+
+            const second = await restart(first);
+
+            assert.equal(deliveryAttempts(second.host, requestId).length, 0, "the committed answer is not sent again");
+            assert.equal(durableAnswers(branch, requestId), undefined, "and its durable copy is released");
+            assert.equal(questionManager.getPendingRequests().length, 0, "a delivered answer is not a pending question");
+
+            // Reconciliation is idempotent: a second pass must not produce another message either.
+            await second.host.fire("session_tree", createFakeContext({ ui: second.ui, branch }));
+
+            assert.equal(deliveryAttempts(second.host, requestId).length, 0);
+            assert.equal(committedAnswers(branch, requestId).length, 1, "the session holds exactly one answer message");
+        });
+
+        it("matches the acknowledgement by requestId instead of message order", async () => {
+            const branch: FakeBranchEntry[] = [];
+            const first = await startSession(branch);
+
+            await ask(first.host, first.ui, QUESTIONS, "call-1");
+            await ask(first.host, first.ui, SECOND, "call-2");
+
+            answerFocusedOption(first.ui);
+            const firstId = attemptedRequestId(first.host.sendMessageCalls[0]!)!;
+            assert.ok(await waitUntil(() => first.ui.customCalls.length === 2), "the second request surfaces to be answered");
+            answerFocusedOption(first.ui);
+            const secondId = attemptedRequestId(first.host.sendMessageCalls[1]!)!;
+            assert.notEqual(firstId, secondId);
+
+            // Only the later message reached the session; the earlier one did not.
+            commitAnswer(first.host, secondId);
+
+            const second = await restart(first);
+
+            assert.equal(deliveryAttempts(second.host, secondId).length, 0, "the committed answer is not retried");
+            assert.equal(deliveryAttempts(second.host, firstId).length, 1, "the uncommitted one is");
+            assert.deepEqual(durableAnswers(branch, firstId), [{ selectedIndexes: [0] }], "the uncommitted answer stays durable");
+            assert.equal(durableAnswers(branch, secondId), undefined, "the committed answer is released");
+        });
+
+        it("keeps an answer durable when the delivery attempt throws", async () => {
+            const { host, ui } = await startSession();
+
+            await ask(host, ui, QUESTIONS, "call-1");
+            const requestId = questionManager.getPendingRequests()[0]!.id;
+
+            host.api.sendMessage = () => {
+                throw new Error("session not owned");
+            };
+
+            answerFocusedOption(ui);
+            await ui.panelClosed;
+
+            assert.equal(questionManager.getPendingRequests().length, 0, "the answer is settled");
+            assert.deepEqual(
+                durableAnswers(host.branch, requestId),
+                [{ selectedIndexes: [0] }],
+                "and stays durable so a retry can still deliver it",
+            );
+            assert.ok(
+                ui.notifyCalls.some((call) => call.type === "error" && /could not be delivered/.test(call.message)),
+                `expected a delivery error notice, got ${JSON.stringify(ui.notifyCalls)}`,
+            );
+        });
+
+        it("keeps an answered-but-undelivered request out of the panel and the dock", async () => {
+            const { host, ui } = await startSession();
+
+            await ask(host, ui, QUESTIONS, "call-1");
+            const requestId = questionManager.getPendingRequests()[0]!.id;
+            answerFocusedOption(ui);
+
+            assert.deepEqual(durableAnswers(host.branch, requestId), [{ selectedIndexes: [0] }], "the answer is undelivered");
+            assert.equal(questionManager.getPendingRequests().length, 0);
+            assert.equal(questionManager.nextPendingRequest(), undefined);
+            assert.equal(ui.mountedWidget("belowEditor", WIDGET_KEY), undefined, "the dock does not offer it");
+
+            await host.commands.get("question")!.handler("", createFakeContext({ ui, branch: host.branch }));
+
+            assert.deepEqual(ui.notifyCalls.at(-1), { message: "No pending questions", type: "info" });
+            assert.equal(ui.customCalls.length, 1, "the panel that was answered is the only one that opened");
+        });
+
+        it("keeps delivery state isolated across a branch restore", async () => {
+            const branchA: FakeBranchEntry[] = [];
+            const branchB: FakeBranchEntry[] = [];
+            const session = await startSession(branchA);
+
+            await ask(session.host, session.ui, QUESTIONS, "call-1");
+            const requestId = questionManager.getPendingRequests()[0]!.id;
+            answerFocusedOption(session.ui);
+
+            assert.deepEqual(durableAnswers(branchA, requestId), [{ selectedIndexes: [0] }], "branch A holds the undelivered answer");
+            assert.equal(deliveryAttempts(session.host, requestId).length, 1);
+
+            await switchBranch(session, branchB);
+
+            assert.equal(deliveryAttempts(session.host, requestId).length, 1, "branch B must not deliver A's answer");
+            assert.equal(questionManager.getPendingRequests().length, 0);
+            assert.deepEqual(durableAnswers(branchA, requestId), [{ selectedIndexes: [0] }], "and must not clear it from A");
+
+            await switchBranch(session, branchA);
+
+            assert.deepEqual(durableAnswers(branchA, requestId), [{ selectedIndexes: [0] }], "A still holds its answer");
+            assert.equal(deliveryAttempts(session.host, requestId).length, 2, "and retries it on return");
+            assert.equal(questionManager.getPendingRequests().length, 0, "without asking the user again");
         });
     });
 

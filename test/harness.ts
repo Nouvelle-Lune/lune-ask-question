@@ -7,8 +7,9 @@
  *
  * The fakes reproduce only the consumed contract: keyed widgets with placement buckets,
  * a `custom()` that instantiates the component eagerly so a test can drive it, session
- * entries appended to a shared branch array, and recorded `sendMessage` calls. The real
- * TUI is not simulated.
+ * entries appended to a mutable branch array, and `sendMessage` calls recorded as delivery
+ * attempts. A call is never a delivery: only `commitSendMessage` models pi having accepted
+ * the message into the session. The real TUI is not simulated.
  */
 import type {
     ExtensionAPI,
@@ -40,6 +41,14 @@ export interface SendMessageCall {
     options: { triggerTurn?: boolean; deliverAs?: string } | undefined;
 }
 
+/** A custom message pi has accepted; what the session branch actually holds. */
+export interface CommittedMessage {
+    customType: string;
+    content: unknown;
+    display: boolean;
+    details: unknown;
+}
+
 export interface AppendEntryCall {
     customType: string;
     data: unknown;
@@ -51,12 +60,24 @@ export interface CustomCall {
     close: (result?: unknown) => void;
 }
 
-/** One entry of the fake session branch; `restore` reads these. */
-export interface FakeBranchEntry {
+/** Extension state written through `appendEntry`; does not enter the model context. */
+export interface FakeCustomEntry {
     type: "custom";
     customType: string;
     data?: unknown;
 }
+
+/** A message pi accepted into the session as a `custom_message` entry. */
+export interface FakeCommittedMessageEntry {
+    type: "custom_message";
+    customType: string;
+    content: unknown;
+    display: boolean;
+    details?: unknown;
+}
+
+/** One entry of the fake session branch; `restore` and reconciliation read these. */
+export type FakeBranchEntry = FakeCustomEntry | FakeCommittedMessageEntry;
 
 export interface FakeUi {
     readonly notifyCalls: NotifyCall[];
@@ -211,10 +232,17 @@ export interface FakePiHost {
     readonly commands: Map<string, { description?: string; handler: (args: string, ctx: ExtensionContext) => Promise<void> | void }>;
     readonly handlers: Map<string, ExtensionHandler[]>;
     readonly messageRenderers: Map<string, MessageRenderer<unknown>>;
+    /** Delivery attempts: the extension asked pi to send these; pi has not accepted them. */
     readonly sendMessageCalls: SendMessageCall[];
+    /** Messages pi really holds in the session; only `commitSendMessage` writes here. */
+    readonly committedMessages: CommittedMessage[];
     readonly appendEntryCalls: AppendEntryCall[];
     /** Session branch the fake `appendEntry` writes; pass it to `createFakeContext`. */
     readonly branch: FakeBranchEntry[];
+    /** Point the fake session at another branch, as a tree jump or a session switch does. */
+    activateBranch(branch: FakeBranchEntry[]): void;
+    /** Write the message of a recorded attempt into the session, as pi does once accepted. */
+    commitSendMessage(index: number): CommittedMessage;
     fire(event: string, ctx: ExtensionContext): Promise<void>;
 }
 
@@ -227,8 +255,9 @@ export function createFakePiHost(
     const handlers = new Map<string, ExtensionHandler[]>();
     const messageRenderers = new Map<string, MessageRenderer<unknown>>();
     const sendMessageCalls: SendMessageCall[] = [];
+    const committedMessages: CommittedMessage[] = [];
     const appendEntryCalls: AppendEntryCall[] = [];
-    const branch = options.branch ?? [];
+    let activeBranch = options.branch ?? [];
 
     const api = {
         on(event: string, handler: ExtensionHandler) {
@@ -259,9 +288,11 @@ export function createFakePiHost(
 
         appendEntry(customType: string, data: unknown) {
             appendEntryCalls.push({ customType, data });
-            branch.push({ type: "custom", customType, data });
+            activeBranch.push({ type: "custom", customType, data });
         },
 
+        // Recording the call is all this does: pi may still drop a steered message before it
+        // reaches the session, so acceptance is modeled by `commitSendMessage` instead.
         sendMessage(message: SendMessageCall["message"], options: SendMessageCall["options"]) {
             sendMessageCalls.push({ message, options });
         },
@@ -280,8 +311,36 @@ export function createFakePiHost(
         handlers,
         messageRenderers,
         sendMessageCalls,
+        committedMessages,
         appendEntryCalls,
-        branch,
+
+        get branch() {
+            return activeBranch;
+        },
+
+        activateBranch(branch) {
+            activeBranch = branch;
+        },
+
+        commitSendMessage(index) {
+            const call = sendMessageCalls[index];
+
+            if (!call) {
+                throw new Error(`no sendMessage attempt recorded at index ${index}`);
+            }
+
+            const committed: CommittedMessage = {
+                customType: call.message.customType,
+                content: call.message.content,
+                display: call.message.display,
+                details: call.message.details,
+            };
+
+            committedMessages.push(committed);
+            activeBranch.push({ type: "custom_message", ...committed });
+
+            return committed;
+        },
 
         async fire(event, ctx) {
             for (const handler of handlers.get(event) ?? []) {

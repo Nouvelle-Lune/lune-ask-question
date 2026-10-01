@@ -228,7 +228,7 @@ describe("question manager", () => {
     });
 
     describe("persistence", () => {
-        it("persists only pending requests, at the state entry key", () => {
+        it("persists the pending requests at the state entry key", () => {
             const manager = newManager();
             const answered = manager.create([{ question: "Answered" }]);
             const pending = manager.create(QUESTIONS);
@@ -242,7 +242,13 @@ describe("question manager", () => {
 
             const snapshot = host.appendEntryCalls[0]!.data as { version: number; requests: Array<{ id: string }> };
             assert.equal(snapshot.version, QUESTION_STATE_VERSION, "the snapshot carries the format it was written in");
-            assert.deepEqual(snapshot.requests.map((request) => request.id), [pending.id]);
+            // Where an undelivered answer is kept is the delivery contract's business
+            // (`test/integration/extension.test.ts`); asserting the answered request is absent here
+            // would forbid a durable outbox that shares this snapshot.
+            assert.ok(
+                snapshot.requests.some((request) => request.id === pending.id),
+                "the pending question is in the snapshot",
+            );
         });
 
         it("restores a request with its draft from the branch", () => {

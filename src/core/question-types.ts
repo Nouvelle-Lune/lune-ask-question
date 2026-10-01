@@ -82,7 +82,14 @@ export interface AskQuestionRequest {
 export interface AskQuestionStateSnapshot {
     version: typeof QUESTION_STATE_VERSION;
     requests: AskQuestionRequest[];
+    /**
+     * Settled requests whose answer message is not confirmed in the session yet.
+     *
+     * `pi.sendMessage()` only attempts delivery, so these stay durable until the active
+     * branch really contains their message; a request is never moved back to `requests`.
+     */
+    outbox: AskQuestionRequest[];
 }
 
 /** Bumped when the persisted request shape changes; a snapshot from another version is not read. */
-export const QUESTION_STATE_VERSION = 1;
+export const QUESTION_STATE_VERSION = 2;

@@ -28,11 +28,12 @@ export type {
 } from "./question-types.ts";
 
 /**
- * Custom session entry holding the pending questions.
+ * Custom session entry holding the question state.
  *
  * A question outlives the turn that asked it: the user may close the panel with Esc,
  * quit Pi, and answer after a restart. The snapshot is written whenever the pending
- * set or a draft changes at a settle point, and read back from the active branch.
+ * set, a draft or the delivery outbox changes at a settle point, and read back from
+ * the active branch.
  */
 export const QUESTION_STATE_ENTRY = "lune-ask-question-state";
 
@@ -41,6 +42,7 @@ export type QuestionManagerEvent =
     | { type: "request-shown"; id: string }
     | { type: "request-answered"; id: string }
     | { type: "request-skipped"; id: string }
+    | { type: "request-delivered"; id: string }
     | { type: "requests-restored" }
     | { type: "requests-cleared" };
 
@@ -48,7 +50,15 @@ export type QuestionManagerListener = (event: QuestionManagerEvent) => void;
 export type QuestionManagerListenerErrorHandler = (error: unknown, event: QuestionManagerEvent) => void;
 
 export class QuestionManager {
-    private readonly requests = new Map<string, AskQuestionRequest>();
+    private readonly pending = new Map<string, AskQuestionRequest>();
+    /**
+     * Settled requests whose answer message is not confirmed in the session yet.
+     *
+     * `pi.sendMessage()` is only an attempt: pi can queue a steered message and drop it
+     * before it reaches the session. A settled request therefore stays here - durable and
+     * out of the pending queue - until the branch really carries its message.
+     */
+    private readonly outbox = new Map<string, AskQuestionRequest>();
     private readonly listeners = new Map<QuestionManagerListener, QuestionManagerListenerErrorHandler | undefined>();
     private shownSeqCounter = 0;
 
@@ -61,20 +71,19 @@ export class QuestionManager {
             draft: emptyDraft(questions.length),
         };
 
-        this.requests.set(request.id, request);
+        this.pending.set(request.id, request);
         this.emit({ type: "request-created", id: request.id });
 
         return request;
     }
 
     get(id: string): Readonly<AskQuestionRequest> | undefined {
-        return this.requests.get(id);
+        return this.pending.get(id) ?? this.outbox.get(id);
     }
 
     /** Pending requests oldest first; this is the order they were created in. */
     getPendingRequests(): readonly AskQuestionRequest[] {
-        return Array.from(this.requests.values())
-            .filter((request) => request.status === "pending")
+        return Array.from(this.pending.values())
             .sort((left, right) => left.createdAt - right.createdAt);
     }
 
@@ -114,9 +123,7 @@ export class QuestionManager {
     }
 
     getPendingRequest(id: string): AskQuestionRequest | undefined {
-        const request = this.requests.get(id);
-
-        return request?.status === "pending" ? request : undefined;
+        return this.pending.get(id);
     }
 
     /**
@@ -136,6 +143,14 @@ export class QuestionManager {
         request.answers = answers.map(copyAnswer);
         request.settledAt = Date.now();
 
+        // Settling is one move: out of the pending queue, into the durable outbox. The
+        // request must not be asked again, but its payload has to survive until pi's
+        // session really carries the answer message. The draft stays with the panel: keeping
+        // it would duplicate a written answer in the outbox and the snapshot.
+        request.draft = emptyDraft(request.questions.length);
+        this.pending.delete(id);
+        this.outbox.set(id, request);
+
         this.emit({ type: "request-answered", id });
 
         return true;
@@ -151,22 +166,51 @@ export class QuestionManager {
         request.status = "skipped";
         request.settledAt = Date.now();
 
+        // A skip is delivered as a custom message too, so it takes the same durable path
+        // as an answer: dropping it from the outbox would lose the model's only notice.
+        request.draft = emptyDraft(request.questions.length);
+        this.pending.delete(id);
+        this.outbox.set(id, request);
+
         this.emit({ type: "request-skipped", id });
 
         return true;
     }
 
-    /** Drop every request, including settled ones; a session starts from its own branch. */
+    /** Settled requests whose answer message is not confirmed in the session yet. */
+    getUndeliveredRequests(): readonly Readonly<AskQuestionRequest>[] {
+        return Array.from(this.outbox.values())
+            .sort((left, right) => left.createdAt - right.createdAt);
+    }
+
+    /**
+     * Release a settled request once its message is confirmed to be on the session branch.
+     *
+     * The event is what makes the persistence listener write an outbox without it, so a
+     * later restore cannot bring it back and deliver a second copy.
+     */
+    acknowledgeDelivery(id: string): boolean {
+        if (!this.outbox.delete(id)) {
+            return false;
+        }
+
+        this.emit({ type: "request-delivered", id });
+
+        return true;
+    }
+
+    /** Drop every request, pending or not; a session starts from its own branch. */
     clearAll(): void {
-        if (this.requests.size === 0) {
+        if (this.pending.size === 0 && this.outbox.size === 0) {
             return;
         }
 
-        this.requests.clear();
+        this.pending.clear();
+        this.outbox.clear();
         this.emit({ type: "requests-cleared" });
     }
 
-    /** Persist the pending requests (with drafts) into the session of `pi`. */
+    /** Persist the pending requests (with drafts) and the delivery outbox into the session of `pi`. */
     persist(pi: ExtensionAPI): void {
         pi.appendEntry(QUESTION_STATE_ENTRY, this.snapshot());
     }
@@ -175,6 +219,7 @@ export class QuestionManager {
         return {
             version: QUESTION_STATE_VERSION,
             requests: this.getPendingRequests().map((request) => structuredClone(request)),
+            outbox: this.getUndeliveredRequests().map((request) => structuredClone(request)),
         };
     }
 
@@ -218,18 +263,42 @@ export class QuestionManager {
         for (const saved of snapshot.requests) {
             // A live request with the same id is newer than the snapshot; the entry is
             // only a fallback for state this process no longer has.
-            if (!isStoredRequest(saved) || this.requests.has(saved.id)) {
+            if (!isStoredRequest(saved) || this.hasRequest(saved.id)) {
                 continue;
             }
 
-            this.requests.set(saved.id, normalizeRequest(saved));
+            this.pending.set(saved.id, normalizePendingRequest(saved));
             this.shownSeqCounter = Math.max(this.shownSeqCounter, saved.shownSeq ?? 0);
+            restored = true;
+        }
+
+        // Settled requests are restored as settled: turning them back into pending would
+        // ask the user again, and dropping them would lose an answer the model never saw.
+        // A snapshot that omits the outbox is still readable - it holds nothing waiting for
+        // delivery - but a version this build does not know is never guessed at.
+        for (const saved of Array.isArray(snapshot.outbox) ? snapshot.outbox : []) {
+            if (!isStoredRequest(saved) || this.hasRequest(saved.id)) {
+                continue;
+            }
+
+            const settled = normalizeSettledRequest(saved);
+
+            if (!settled) {
+                continue;
+            }
+
+            this.outbox.set(settled.id, settled);
             restored = true;
         }
 
         if (restored) {
             this.emit({ type: "requests-restored" });
         }
+    }
+
+    /** Whether either queue already holds `id`; a snapshot never replaces live state. */
+    private hasRequest(id: string): boolean {
+        return this.pending.has(id) || this.outbox.has(id);
     }
 
     private emit(event: QuestionManagerEvent): void {
@@ -315,7 +384,7 @@ function emptyDraft(questionCount: number): AskQuestionDraft {
     };
 }
 
-function normalizeRequest(saved: AskQuestionRequest): AskQuestionRequest {
+function normalizePendingRequest(saved: AskQuestionRequest): AskQuestionRequest {
     return {
         id: saved.id,
         createdAt: typeof saved.createdAt === "number" ? saved.createdAt : Date.now(),
@@ -324,6 +393,51 @@ function normalizeRequest(saved: AskQuestionRequest): AskQuestionRequest {
         status: "pending",
         draft: normalizeDraft(saved.draft, saved.questions.length),
     };
+}
+
+/**
+ * A settled outbox entry read back from a snapshot.
+ *
+ * Only the delivery payload is kept: a settled request never reopens, so its draft is not
+ * restored as panel state. An answered entry without valid answers cannot be delivered and
+ * is not guessed at.
+ */
+function normalizeSettledRequest(saved: AskQuestionRequest): AskQuestionRequest | undefined {
+    if (saved.status !== "answered" && saved.status !== "skipped") {
+        return undefined;
+    }
+
+    const request: AskQuestionRequest = {
+        id: saved.id,
+        createdAt: typeof saved.createdAt === "number" ? saved.createdAt : Date.now(),
+        questions: saved.questions.map(copyQuestion),
+        status: saved.status,
+        draft: emptyDraft(saved.questions.length),
+        settledAt: typeof saved.settledAt === "number" ? saved.settledAt : Date.now(),
+    };
+
+    if (saved.status === "answered") {
+        const answers = normalizeAnswers(saved.answers);
+
+        if (!answers) {
+            return undefined;
+        }
+
+        request.answers = answers;
+    }
+
+    return request;
+}
+
+/** A settled answer list from durable state; every entry has to be a real answer. */
+function normalizeAnswers(saved: unknown): AskQuestionAnswer[] | undefined {
+    if (!Array.isArray(saved) || saved.length === 0) {
+        return undefined;
+    }
+
+    const answers = saved.map((answer) => normalizeAnswer(answer));
+
+    return answers.every((answer): answer is AskQuestionAnswer => answer !== undefined) ? answers : undefined;
 }
 
 /** Requests that were never shown sort before every shown one. */
