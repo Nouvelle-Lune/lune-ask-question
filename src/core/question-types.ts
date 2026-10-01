@@ -80,7 +80,6 @@ export interface AskQuestionRequest {
 }
 
 export interface AskQuestionStateSnapshot {
-    version: typeof QUESTION_STATE_VERSION;
     requests: AskQuestionRequest[];
     /**
      * Settled requests whose answer message is not confirmed in the session yet.
@@ -90,6 +89,3 @@ export interface AskQuestionStateSnapshot {
      */
     outbox: AskQuestionRequest[];
 }
-
-/** Bumped when the persisted request shape changes; a snapshot from another version is not read. */
-export const QUESTION_STATE_VERSION = 2;

@@ -19,7 +19,6 @@ import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import luneAskQuestion from "../../src/index.ts";
 import {
     QUESTION_STATE_ENTRY,
-    QUESTION_STATE_VERSION,
     questionManager,
     type AskQuestion,
     type AskQuestionAnswer,
@@ -335,11 +334,11 @@ describe("lune-ask-question extension", () => {
             await tool.execute("call-1", { questions: QUESTIONS }, undefined, undefined, ctx);
 
             const persisted = host.appendEntryCalls.filter((call) => call.customType === QUESTION_STATE_ENTRY);
-            const first = persisted[0]!.data as { version: number; requests: unknown[] };
+            const first = persisted[0]!.data as { requests: unknown[]; outbox: unknown[] };
 
             assert.equal(persisted.length, 2, "creating and showing the request each write a snapshot");
-            assert.equal(first.version, QUESTION_STATE_VERSION, "the snapshot carries the format it was written in");
             assert.equal(first.requests.length, 1, "the request is in a snapshot before it is shown");
+            assert.deepEqual(first.outbox, [], "and nothing is waiting for delivery yet");
         });
 
         it("reports that the tool is unavailable outside the TUI", async () => {

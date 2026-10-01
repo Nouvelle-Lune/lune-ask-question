@@ -3,7 +3,6 @@ import { beforeEach, describe, it } from "node:test";
 
 import {
     QUESTION_STATE_ENTRY,
-    QUESTION_STATE_VERSION,
     QuestionManager,
     questionManager,
     type AskQuestion,
@@ -240,14 +239,19 @@ describe("question manager", () => {
             assert.equal(host.appendEntryCalls.length, 1);
             assert.equal(host.appendEntryCalls[0]!.customType, QUESTION_STATE_ENTRY);
 
-            const snapshot = host.appendEntryCalls[0]!.data as { version: number; requests: Array<{ id: string }> };
-            assert.equal(snapshot.version, QUESTION_STATE_VERSION, "the snapshot carries the format it was written in");
-            // Where an undelivered answer is kept is the delivery contract's business
-            // (`test/integration/extension.test.ts`); asserting the answered request is absent here
-            // would forbid a durable outbox that shares this snapshot.
+            const snapshot = host.appendEntryCalls[0]!.data as {
+                requests: Array<{ id: string }>;
+                outbox: Array<{ id: string }>;
+            };
+
             assert.ok(
                 snapshot.requests.some((request) => request.id === pending.id),
                 "the pending question is in the snapshot",
+            );
+            assert.deepEqual(
+                snapshot.outbox.map((request) => request.id),
+                [answered.id],
+                "and the settled answer is durable for delivery",
             );
         });
 
@@ -302,11 +306,11 @@ describe("question manager", () => {
             const request = manager.create(QUESTIONS);
 
             const branch = branchWith({
-                version: QUESTION_STATE_VERSION,
                 requests: [{
                     ...request,
                     draft: { currentIndex: 99, optionIndex: -3, answers: "broken", customDrafts: null },
                 }],
+                outbox: [],
             });
 
             const restarted = newManager();
@@ -326,8 +330,8 @@ describe("question manager", () => {
             const latest = manager.create([{ question: "Latest" }]);
 
             const branch: FakeBranchEntry[] = [
-                { type: "custom", customType: QUESTION_STATE_ENTRY, data: { version: QUESTION_STATE_VERSION, requests: [stale] } },
-                { type: "custom", customType: QUESTION_STATE_ENTRY, data: { version: QUESTION_STATE_VERSION, requests: [latest] } },
+                { type: "custom", customType: QUESTION_STATE_ENTRY, data: { requests: [stale], outbox: [] } },
+                { type: "custom", customType: QUESTION_STATE_ENTRY, data: { requests: [latest], outbox: [] } },
             ];
 
             const restarted = newManager();
@@ -344,26 +348,36 @@ describe("question manager", () => {
 
             manager.restore(createFakeContext({
                 branch: [
-                    { type: "custom", customType: "something-else", data: { requests: [{ id: "x", questions: [] }] } },
-                    { type: "custom", customType: QUESTION_STATE_ENTRY, data: { version: QUESTION_STATE_VERSION, requests: "broken" } },
+                    { type: "custom", customType: "something-else", data: { requests: [{ id: "x", questions: [] }], outbox: [] } },
+                    { type: "custom", customType: QUESTION_STATE_ENTRY, data: { requests: "broken", outbox: [] } },
                 ],
             }));
 
             assert.deepEqual(manager.getPendingRequests(), []);
         });
 
-        it("ignores a snapshot written by another format version", () => {
+        it("ignores a snapshot that does not match the current schema", () => {
             const request = newManager().create(QUESTIONS);
-
-            const branch: FakeBranchEntry[] = [
-                { type: "custom", customType: QUESTION_STATE_ENTRY, data: { requests: [request] } },
-                { type: "custom", customType: QUESTION_STATE_ENTRY, data: { version: QUESTION_STATE_VERSION + 1, requests: [request] } },
+            const malformed: unknown[] = [
+                { requests: [request] },
+                { outbox: [request] },
+                { requests: "broken", outbox: [] },
+                { requests: [], outbox: null },
             ];
 
-            const restarted = newManager();
-            restarted.restore(createFakeContext({ branch }));
+            for (const data of malformed) {
+                const restarted = newManager();
 
-            assert.deepEqual(restarted.getPendingRequests(), [], "a version this build cannot read is not guessed at");
+                restarted.restore(createFakeContext({
+                    branch: [{ type: "custom", customType: QUESTION_STATE_ENTRY, data }],
+                }));
+
+                assert.deepEqual(
+                    restarted.getPendingRequests(),
+                    [],
+                    `a snapshot without both collections is not restored: ${JSON.stringify(data)}`,
+                );
+            }
         });
 
         it("does not replace a live request with the same id", () => {
@@ -372,8 +386,8 @@ describe("question manager", () => {
             request.draft.answers[0] = { selectedIndexes: [0] };
 
             const branch = branchWith({
-                version: QUESTION_STATE_VERSION,
                 requests: [{ ...request, draft: { ...request.draft, answers: [undefined, undefined] } }],
+                outbox: [],
             });
 
             manager.restore(createFakeContext({ branch }));

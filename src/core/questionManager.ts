@@ -5,7 +5,6 @@ import type {
     ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 
-import { QUESTION_STATE_VERSION } from "./question-types.ts";
 import type {
     AskQuestion,
     AskQuestionAnswer,
@@ -13,8 +12,6 @@ import type {
     AskQuestionRequest,
     AskQuestionStateSnapshot,
 } from "./question-types.ts";
-
-export { QUESTION_STATE_VERSION } from "./question-types.ts";
 
 export type {
     AnswerMessageQuestion,
@@ -217,7 +214,6 @@ export class QuestionManager {
 
     snapshot(): AskQuestionStateSnapshot {
         return {
-            version: QUESTION_STATE_VERSION,
             requests: this.getPendingRequests().map((request) => structuredClone(request)),
             outbox: this.getUndeliveredRequests().map((request) => structuredClone(request)),
         };
@@ -236,7 +232,9 @@ export class QuestionManager {
 
             const snapshot = entry.data as Partial<AskQuestionStateSnapshot> | undefined;
 
-            if (snapshot?.version === QUESTION_STATE_VERSION && Array.isArray(snapshot.requests)) {
+            // The newest state entry wins, but only when it matches the schema this build
+            // writes; a malformed snapshot is not guessed at and not patched over.
+            if (snapshot && Array.isArray(snapshot.requests) && Array.isArray(snapshot.outbox)) {
                 this.restoreSnapshot(snapshot as AskQuestionStateSnapshot);
             }
 
@@ -274,9 +272,7 @@ export class QuestionManager {
 
         // Settled requests are restored as settled: turning them back into pending would
         // ask the user again, and dropping them would lose an answer the model never saw.
-        // A snapshot that omits the outbox is still readable - it holds nothing waiting for
-        // delivery - but a version this build does not know is never guessed at.
-        for (const saved of Array.isArray(snapshot.outbox) ? snapshot.outbox : []) {
+        for (const saved of snapshot.outbox) {
             if (!isStoredRequest(saved) || this.hasRequest(saved.id)) {
                 continue;
             }
