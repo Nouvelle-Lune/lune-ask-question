@@ -119,18 +119,6 @@ export class QuestionPanelController {
             % rows.length;
     }
 
-    /** Focus a row by its position in `questionRows`; returns the row, or `undefined` when there is none. */
-    focusRow(rowIndex: number): QuestionRow | undefined {
-        const question = this.currentQuestion();
-        const row = question === undefined ? undefined : questionRows(question)[rowIndex];
-
-        if (row) {
-            this.draft.optionIndex = rowIndex;
-        }
-
-        return row;
-    }
-
     /** Jump to a tab; the submit tab is `questions.length`. Returns whether the tab changed. */
     selectTab(index: number): boolean {
         if (index < 0 || index > this.questions.length || index === this.draft.currentIndex) {

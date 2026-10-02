@@ -48,14 +48,12 @@ In pi's fullscreen mode the panel also takes the mouse:
 
 | Mouse | |
 | --- | --- |
-| Click a row | Focus it; `Type something` opens the editor |
-| Double-click an option or `Next` | Confirm it, like `Enter` |
-| Click a tab or `←` `→` | Switch question tabs |
+| Click a tab | Switch question tabs |
 | Click in the editor | Move the cursor |
 | Wheel over the preview | Scroll the preview |
 | Wheel elsewhere | Scroll the body, including a long question or `displayText` |
 
-A press anywhere else is left to pi's text selection, so the panel's text can still be copied. Regular mode keeps the terminal's own mouse handling, and every action above also has a key.
+Option rows stay keyboard-only - a click neither focuses nor confirms one - and a press that hits no tab or editor is left to pi's text selection, so the panel's text can still be copied. Regular mode keeps the terminal's own mouse handling, and every action above also has a key.
 
 Answers land in the transcript and resume the model:
 

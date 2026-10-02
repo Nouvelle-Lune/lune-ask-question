@@ -335,8 +335,8 @@ export class QuestionPanel implements Component, Focusable {
 
     /**
      * Fullscreen mode routes the mouse here; regular mode leaves it to the terminal, so every
-     * action below also has a key. Presses that hit nothing interactive stay unhandled, which
-     * keeps the TUI's text selection for copying out of the panel.
+     * action below also has a key. Only the tab strip and the open editor are targets: a press
+     * on an option row stays unhandled, so the panel's text can still be selected and copied.
      */
     handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
         const layout = this.layout;
@@ -365,11 +365,7 @@ export class QuestionPanel implements Component, Focusable {
         }
 
         if (event.type === "press") {
-            return this.withPreviewReset(() => this.pressAt(layout, event));
-        }
-
-        if (event.type === "click") {
-            return this.withPreviewReset(() => this.clickAt(layout, event));
+            return this.withPreviewReset(() => this.pressTabAt(layout, event));
         }
 
         return undefined;
@@ -446,66 +442,31 @@ export class QuestionPanel implements Component, Focusable {
         return next !== current;
     }
 
-    private pressAt(layout: QuestionPanelLayout, event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    /** The tab strip is the only row the mouse can act on; option rows stay keyboard-only. */
+    private pressTabAt(layout: QuestionPanelLayout, event: TuiMouseEvent): TuiMouseEventResult | undefined {
         const tab = layout.tabs.find((span) => insideSpan(span, event));
 
-        if (tab) {
-            const target = tab.target;
-
-            if (target.kind === "step" || target.index !== this.draft.currentIndex) {
-                // Before the switch: the draft is stored under the question being left.
-                this.leaveEditorForTab();
-
-                if (target.kind === "step") {
-                    this.moveTab(target.step);
-                } else {
-                    this.controller.selectTab(target.index);
-                    this.inputMode = false;
-                    this.syncAutoInputMode();
-                }
-            }
-
-            this.requestRender();
-            return { handled: true, focus: true };
-        }
-
-        const hit = layout.rows.find((span) => insideSpan(span, event));
-        const row = hit === undefined ? undefined : this.controller.focusRow(hit.rowIndex);
-
-        if (!row) {
+        if (!tab) {
             return undefined;
         }
 
-        // Following the new focus would re-center the window and slide another row under the
-        // pointer before the second press of a double click.
-        this.bodyScroll = layout.body.offset;
+        const target = tab.target;
 
-        if (row.kind === "custom") {
-            if (!this.inputMode) {
-                this.enterInputMode();
+        if (target.kind === "step" || target.index !== this.draft.currentIndex) {
+            // Before the switch: the draft is stored under the question being left.
+            this.leaveEditorForTab();
+
+            if (target.kind === "step") {
+                this.moveTab(target.step);
+            } else {
+                this.controller.selectTab(target.index);
+                this.inputMode = false;
+                this.syncAutoInputMode();
             }
-        } else if (this.inputMode) {
-            this.exitInputMode();
         }
 
         this.requestRender();
         return { handled: true, focus: true };
-    }
-
-    /** A press already focused the row; a double click is what confirms it, like `Enter`. */
-    private clickAt(layout: QuestionPanelLayout, event: TuiMouseEvent): TuiMouseEventResult | undefined {
-        const hit = layout.rows.find((span) => insideSpan(span, event));
-
-        if (!hit) {
-            return layout.tabs.some((span) => insideSpan(span, event)) ? { handled: true } : undefined;
-        }
-
-        // Only the second click: a third one would land on whatever the answer advanced to.
-        if (event.clickCount === 2 && this.controller.focusedRow()?.kind !== "custom") {
-            this.confirmRow();
-        }
-
-        return { handled: true };
     }
 
     /** Moving away by mouse must keep what was typed, as `Esc` does. */

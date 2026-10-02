@@ -99,8 +99,6 @@ export type TabTarget = { kind: "tab"; index: number } | { kind: "step"; step: n
  */
 export interface QuestionPanelLayout {
     tabs: Array<PanelSpan & { target: TabTarget }>;
-    /** Visible lines of each option row; `rowIndex` is its position in `questionRows`. */
-    rows: Array<PanelSpan & { rowIndex: number }>;
     body: PanelRect & { offset: number; maxOffset: number };
     preview?: PanelRect & { offset: number; maxOffset: number };
     /** The editor's full extent, `y` possibly outside the body window when it is scrolled. */
@@ -114,7 +112,6 @@ export interface QuestionPanelFrame {
 
 /** Body-relative positions collected while the body is built. */
 interface BodyMarks {
-    rows: Array<{ line: number; end: number; rowIndex: number }>;
     preview?: { line: number; height: number; start: number; width: number; offset: number; maxOffset: number };
     editor?: { line: number; height: number; width: number };
 }
@@ -204,18 +201,8 @@ export class QuestionPanelRenderer {
         body: QuestionPanelLayout["body"],
     ): QuestionPanelLayout {
         const toPanel = (line: number) => body.y + line - body.offset;
-        const onScreen = (line: number) => line >= body.offset && line < body.offset + body.height;
 
-        const rows = marks.rows
-            .filter((row) => onScreen(row.line))
-            .map((row) => ({
-                y: toPanel(row.line),
-                start: body.x,
-                end: body.x + row.end,
-                rowIndex: row.rowIndex,
-            }));
-
-        const layout: QuestionPanelLayout = { tabs, rows, body };
+        const layout: QuestionPanelLayout = { tabs, body };
 
         if (marks.preview) {
             const top = Math.max(marks.preview.line, body.offset);
@@ -313,7 +300,7 @@ export class QuestionPanelRenderer {
         state: QuestionPanelRenderState,
     ): RenderedBody {
         const lines: string[] = [];
-        const marks: BodyMarks = { rows: [] };
+        const marks: BodyMarks = {};
         let keep: RenderedBody["keep"];
 
         if (this.isSubmitTab) {
@@ -358,8 +345,6 @@ export class QuestionPanelRenderer {
         const regionTop = lines.length;
         const focusLine = regionTop + region.focusLine;
         lines.push(...region.lines);
-
-        marks.rows = region.rows.map((row) => ({ ...row, line: regionTop + row.line }));
 
         if (region.preview) {
             marks.preview = { ...region.preview, line: regionTop + region.preview.line };
@@ -448,7 +433,6 @@ export class QuestionPanelRenderer {
             return {
                 lines: [...rows.lines, ...Array<string>(stackedGap).fill(""), ...block.lines],
                 focusLine: rows.focusLine,
-                rows: rows.rows,
                 preview: {
                     line: rows.lines.length + stackedGap,
                     height: block.lines.length,
@@ -463,7 +447,6 @@ export class QuestionPanelRenderer {
 
         return {
             ...composeColumns(rows, block.lines, columns, contentWidth),
-            rows: rows.rows,
             preview: {
                 line: 0,
                 height: block.lines.length,
@@ -480,7 +463,6 @@ export class QuestionPanelRenderer {
         const rows = questionRows(question);
         const focusedIndex = focusedRowIndex(rows, this.draft.optionIndex);
         const answer = this.draft.answers[this.draft.currentIndex];
-        const marks: OptionRegion["rows"] = [];
         let focusLine = 0;
 
         for (const [rowIndex, row] of rows.entries()) {
@@ -491,12 +473,11 @@ export class QuestionPanelRenderer {
             }
 
             for (const line of this.renderRow(question, row, focused, answer, contentWidth)) {
-                marks.push({ line: lines.length, end: contentWidth, rowIndex });
                 lines.push(line);
             }
         }
 
-        return { lines, focusLine, rows: marks };
+        return { lines, focusLine };
     }
 
     private previewRendererFor(questionIndex: number, question: AskQuestion): QuestionPreviewRenderer {
@@ -738,7 +719,6 @@ export class QuestionPanelRenderer {
 interface OptionRegion {
     lines: string[];
     focusLine: number;
-    rows: Array<{ line: number; end: number; rowIndex: number }>;
     preview?: NonNullable<BodyMarks["preview"]>;
 }
 
@@ -785,11 +765,11 @@ function bodyWindow(
  * instead of leaving an invisible tail of blank columns.
  */
 function composeColumns(
-    left: { lines: readonly string[]; focusLine: number; rows: OptionRegion["rows"] },
+    left: { lines: readonly string[]; focusLine: number },
     right: readonly string[],
     columns: { leftWidth: number; rightWidth: number; gap: number },
     contentWidth: number,
-): { lines: string[]; focusLine: number; rows: OptionRegion["rows"] } {
+): { lines: string[]; focusLine: number } {
     const gap = " ".repeat(columns.gap);
     const height = Math.max(left.lines.length, right.length);
     const lines: string[] = [];
@@ -801,10 +781,7 @@ function composeColumns(
         lines.push(truncateToWidth(`${leftCell}${gap}${rightCell}`, contentWidth, "…", true));
     }
 
-    // A click on the gap or the preview must not pick the option on the same row.
-    const rows = left.rows.map((row) => ({ ...row, end: Math.min(row.end, columns.leftWidth) }));
-
-    return { lines, focusLine: left.focusLine, rows };
+    return { lines, focusLine: left.focusLine };
 }
 
 function padEndCell(text: string, width: number): string {

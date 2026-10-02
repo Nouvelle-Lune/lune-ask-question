@@ -7,6 +7,7 @@ import {
     stripTerminalSequences,
     visibleWidth,
     type TuiMouseEvent,
+    type TuiMouseEventResult,
     type TuiMouseEventType,
 } from "@earendil-works/pi-tui";
 
@@ -142,12 +143,13 @@ function wheel(panel: QuestionPanel, at: { x: number; y: number }, delta: number
     return panel.handleMouse(mouseEvent("wheel", at, { wheelDelta: delta }));
 }
 
-/** A press and the click the TUI synthesizes on release; `clickCount` 2 is a double click. */
-function click(panel: QuestionPanel, at: { x: number; y: number }, clickCount = 1) {
+/** Feeds the press and the release click the TUI synthesizes for it; returns the press result. */
+function click(panel: QuestionPanel, at: { x: number; y: number }): TuiMouseEventResult | undefined {
     const press = panel.handleMouse(mouseEvent("press", at));
-    const released = panel.handleMouse(mouseEvent("click", at, { clickCount }));
 
-    return { press, click: released };
+    panel.handleMouse(mouseEvent("click", at));
+
+    return press;
 }
 
 describe("question panel", () => {
@@ -1170,79 +1172,42 @@ describe("question panel", () => {
             },
         ];
 
-        it("focuses an option on a single click without answering it", () => {
-            const { panel, request, counts } = createFixture(OPTION_QUESTIONS);
-
-            const result = click(panel, locate(panel, "2. SQLite"));
-
-            assert.equal(result.press?.handled, true);
-            assert.equal(request.draft.optionIndex, 1);
-            assert.equal(request.status, "pending", "a single click must not answer");
-            assert.equal(counts.closed, 0);
-
-            panel.handleInput(ENTER);
-            assert.deepEqual(request.answers, [{ selectedIndexes: [1] }], "Enter confirms the clicked row");
-        });
-
-        it("confirms an option on a double click", () => {
+        it("leaves a click on an option row to the text selection", () => {
             const { panel, request, counts } = createFixture(OPTION_QUESTIONS);
             const at = locate(panel, "2. SQLite");
 
-            click(panel, at);
-            click(panel, at, 2);
-
-            assert.deepEqual(request.answers, [{ selectedIndexes: [1] }]);
-            assert.equal(counts.closed, 1);
+            assert.equal(panel.handleMouse(mouseEvent("press", at)), undefined, "an unhandled press keeps pi's text selection");
+            assert.equal(panel.handleMouse(mouseEvent("click", at)), undefined);
+            assert.equal(request.draft.optionIndex, 0, "a click does not move the focus");
+            assert.equal(request.status, "pending");
+            assert.equal(counts.closed, 0);
         });
 
-        it("focuses an option from its description line as well", () => {
-            const { panel, request } = createFixture(OPTION_QUESTIONS);
+        it("neither focuses nor answers on a double click", () => {
+            const { panel, request, counts } = createFixture(OPTION_QUESTIONS);
+            const at = locate(panel, "2. SQLite");
 
-            panel.handleInput(DOWN);
-            click(panel, locate(panel, "server"));
+            panel.handleMouse(mouseEvent("press", at));
+            panel.handleMouse(mouseEvent("click", at, { clickCount: 2 }));
 
             assert.equal(request.draft.optionIndex, 0);
+            assert.equal(request.answers, undefined, "a double click must not answer");
+            assert.equal(counts.closed, 0);
         });
 
-        it("toggles a multi-select option on a double click only", () => {
-            const { panel, request } = createFixture([
-                { question: "Pick", multiSelect: true, options: [{ label: "A" }, { label: "B" }] },
-            ]);
-            const at = locate(panel, "2. B");
-
-            click(panel, at);
-            assert.equal(request.draft.answers[0], undefined, "a single click only moves the focus");
-
-            click(panel, at, 2);
-            assert.deepEqual(request.draft.answers[0], { selectedIndexes: [1] });
-        });
-
-        it("opens the editor when the custom row is clicked", () => {
+        it("does not open the editor from the custom row", () => {
             const { panel } = createFixture(OPTION_QUESTIONS);
 
-            click(panel, locate(panel, "Type something"));
-
-            assert.match(renderText(panel), /Your answer:/);
-            type(panel, "mysql");
-            assert.match(renderText(panel), /mysql/, "keys go to the editor after the click");
-        });
-
-        it("leaves the editor with its draft when an option is clicked", () => {
-            const { panel, request } = createFixture(OPTION_QUESTIONS);
-
-            click(panel, locate(panel, "Type something"));
-            type(panel, "mysql");
-            click(panel, locate(panel, "1. Postgres"));
-
+            assert.equal(panel.handleMouse(mouseEvent("press", locate(panel, "Type something"))), undefined);
             assert.doesNotMatch(renderText(panel), /Your answer:/);
-            assert.equal(request.draft.optionIndex, 0);
-            assert.equal(request.draft.customDrafts[0], "mysql");
         });
 
         it("switches questions from the tab strip", () => {
             const { panel, request } = createFixture(TWO_QUESTIONS);
 
-            click(panel, locate(panel, "□ Auth"));
+            const tab = click(panel, locate(panel, "□ Auth"));
+
+            assert.equal(tab?.handled, true, "a tab press claims the mouse instead of selecting text");
             assert.equal(request.draft.currentIndex, 1);
             assert.match(renderText(panel), /Second/);
 
@@ -1267,19 +1232,7 @@ describe("question panel", () => {
             assert.equal(request.draft.customDrafts[1], undefined);
         });
 
-        it("does not confirm again on a triple click", () => {
-            const { panel, request } = createFixture(TWO_QUESTIONS);
-            const at = locate(panel, "1. A");
-
-            click(panel, at);
-            click(panel, at, 2);
-            assert.equal(request.draft.currentIndex, 1, "the double click answered the first question");
-
-            click(panel, at, 3);
-            assert.equal(request.draft.answers[1], undefined, "the third click only focuses");
-        });
-
-        it("leaves presses outside interactive rows to the text selection", () => {
+        it("leaves presses outside the tabs and the editor to the text selection", () => {
             const { panel, request } = createFixture(OPTION_QUESTIONS);
 
             assert.equal(panel.handleMouse(mouseEvent("press", locate(panel, "Which database?"))), undefined);
@@ -1342,22 +1295,6 @@ describe("question panel", () => {
             assert.equal(renderText(panel), centered);
         });
 
-        it("keeps the window still when a row is clicked", () => {
-            const { panel, request } = createFixture(LONG_BODY, { rows: 20 });
-
-            const at = locate(panel, "Postgres");
-
-            for (let step = 0; step < 2; step++) {
-                wheel(panel, at, -1);
-            }
-
-            const before = locate(panel, "2. SQLite");
-            click(panel, before);
-
-            assert.equal(request.draft.optionIndex, 1);
-            assert.deepEqual(locate(panel, "2. SQLite"), before, "the clicked row must stay under the pointer");
-        });
-
         it("scrolls a long preview on its own", () => {
             const { panel, request } = createFixture(LONG_PREVIEW, { rows: 40 });
             const width = 120;
@@ -1416,7 +1353,9 @@ describe("question panel", () => {
         it("routes clicks inside the open editor to it", () => {
             const { panel, request } = createFixture(OPTION_QUESTIONS);
 
-            click(panel, locate(panel, "Type something"));
+            // option 0 -> custom is one row up
+            panel.handleInput(UP);
+            panel.handleInput(ENTER);
             type(panel, "abc");
 
             const at = locate(panel, "abc");
