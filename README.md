@@ -1,19 +1,31 @@
 # Lune Ask Question
 
-[![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![npm version](https://img.shields.io/npm/v/lune-ask-question.svg)](https://www.npmjs.com/package/lune-ask-question) [![npm downloads](https://img.shields.io/npm/dw/lune-ask-question.svg)](https://www.npmjs.com/package/lune-ask-question) [![license](https://img.shields.io/npm/l/lune-ask-question.svg)](https://github.com/Nouvelle-Lune/lune-ask-question/blob/main/LICENSE)
+
+![Lune Ask Question preview](https://raw.githubusercontent.com/Nouvelle-Lune/lune-ask-question/main/docs/question-panel.png)
 
 **Structured questions for [Pi](https://pi.dev): the model asks, the panel opens, and your answer reaches it when you are ready.**
 
 `ask_user_questions` is for the decisions the model should not make on its own. Asking is asynchronous: the question waits in the session while the model keeps working on everything that does not depend on it, and your answer - or a skip - arrives back as a message that resumes it. Read the panel, take your time, and answer when you get to it.
 
-<img src="docs/question-panel.png" alt="The question panel: two question tabs, the focused option's Markdown preview pane, numbered options and the free-form row" width="880">
-
 ## Quick start
 
-Install from git:
+Install from npm:
+
+```bash
+pi install npm:lune-ask-question
+```
+
+or straight from GitHub:
 
 ```bash
 pi install git:github.com/Nouvelle-Lune/lune-ask-question
+```
+
+Then start Pi normally:
+
+```bash
+pi
 ```
 
 ## What it does
@@ -57,13 +69,13 @@ Option rows stay keyboard-only - a click neither focuses nor confirms one - and 
 
 Answers land in the transcript and resume the model:
 
-<img src="docs/question-answer-row.png" alt="The Questions answered row: header, question and the selected option or written answer for each question" width="880">
+![The Questions answered row: header, question and the selected option or written answer for each question](https://raw.githubusercontent.com/Nouvelle-Lune/lune-ask-question/main/docs/question-answer-row.png)
 
 ## Pending questions
 
 `Esc` is a defer, not a dismissal: the panel closes, the request stays pending, and the dock under the editor says which question `/question` would show next.
 
-<img src="docs/question-dock.png" alt="The below-editor dock: 1 pending question, the next question and the /question hint" width="880">
+![The below-editor dock: 1 pending question, the next question and the /question hint](https://raw.githubusercontent.com/Nouvelle-Lune/lune-ask-question/main/docs/question-dock.png)
 
 A question that just arrived surfaces immediately, while one you only deferred waits its turn. A request that arrives while a panel is open does not need `/question`: answering the current one hands the panel over to the next.
 
@@ -78,6 +90,8 @@ LAQ_DEMO=two npm run tui:demo   # queue a second request to watch the handover
 LAQ_DEMO=multi npm run tui:demo # one request with three questions, to watch the tabs
 npm run docs:images             # regenerate docs/*.svg + docs/*.png (needs rsvg-convert)
 ```
+
+`@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`, and `typebox` are supplied by the Pi host at runtime, so the package declares them as `peerDependencies` with a `"*"` range and never bundles them. They are repeated in `devDependencies` so local typecheck and tests resolve the same modules Pi injects.
 
 ## License
 

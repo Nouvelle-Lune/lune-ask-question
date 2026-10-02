@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-03
+
 ### Added
 
 - **Interactive question panel.** `ask_user_questions` opens a centered overlay as soon as the tool call arrives: tabbed questions, numbered options with descriptions, multi-select checkboxes, and a `Type something` row for free-form answers. `displayText` renders as Markdown above the options, and a single-question request submits on the option press while several questions walk through a Submit tab.
