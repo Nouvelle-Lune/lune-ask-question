@@ -44,6 +44,19 @@ A single-question request submits on the option press. Several questions walk th
 
 Skip is `Shift+S`, so a plain `s` stays available as the first letter of an answer; on a `Type something` row, an answer that starts with a capital `S` starts with `Enter` instead.
 
+In pi's fullscreen mode the panel also takes the mouse:
+
+| Mouse | |
+| --- | --- |
+| Click a row | Focus it; `Type something` opens the editor |
+| Double-click an option or `Next` | Confirm it, like `Enter` |
+| Click a tab or `←` `→` | Switch question tabs |
+| Click in the editor | Move the cursor |
+| Wheel over the preview | Scroll the preview |
+| Wheel elsewhere | Scroll the body, including a long question or `displayText` |
+
+A press anywhere else is left to pi's text selection, so the panel's text can still be copied. Regular mode keeps the terminal's own mouse handling, and every action above also has a key.
+
 Answers land in the transcript and resume the model:
 
 <img src="docs/question-answer-row.png" alt="The Questions answered row: header, question and the selected option or written answer for each question" width="880">

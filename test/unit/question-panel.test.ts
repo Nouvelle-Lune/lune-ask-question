@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import { beforeEach, describe, it } from "node:test";
 
 import { initTheme } from "@earendil-works/pi-coding-agent";
-import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import {
+    stripTerminalSequences,
+    visibleWidth,
+    type TuiMouseEvent,
+    type TuiMouseEventType,
+} from "@earendil-works/pi-tui";
 
 import {
     questionManager,
@@ -94,6 +99,54 @@ function type(panel: QuestionPanel, text: string): void {
     for (const character of text) {
         panel.handleInput(character);
     }
+}
+
+/** Panel-local cell of the first rendered occurrence of `text`, as the user sees it. */
+function locate(panel: QuestionPanel, text: string, width = 80): { x: number; y: number } {
+    const lines = renderLines(panel, width);
+
+    for (const [y, line] of lines.entries()) {
+        const index = line.indexOf(text);
+
+        if (index >= 0) {
+            return { x: visibleWidth(line.slice(0, index)), y };
+        }
+    }
+
+    assert.fail(`${JSON.stringify(text)} is not on screen: ${JSON.stringify(lines)}`);
+}
+
+function mouseEvent(
+    type: TuiMouseEventType,
+    at: { x: number; y: number },
+    extra: Partial<TuiMouseEvent> = {},
+): TuiMouseEvent {
+    return {
+        type,
+        button: type === "wheel" ? "none" : "left",
+        x: at.x,
+        y: at.y,
+        screenX: at.x,
+        screenY: at.y,
+        width: 80,
+        height: 40,
+        shift: false,
+        alt: false,
+        ctrl: false,
+        ...extra,
+    };
+}
+
+function wheel(panel: QuestionPanel, at: { x: number; y: number }, delta: number) {
+    return panel.handleMouse(mouseEvent("wheel", at, { wheelDelta: delta }));
+}
+
+/** A press and the click the TUI synthesizes on release; `clickCount` 2 is a double click. */
+function click(panel: QuestionPanel, at: { x: number; y: number }, clickCount = 1) {
+    const press = panel.handleMouse(mouseEvent("press", at));
+    const released = panel.handleMouse(mouseEvent("click", at, { clickCount }));
+
+    return { press, click: released };
 }
 
 describe("question panel", () => {
@@ -998,6 +1051,293 @@ describe("question panel", () => {
             assert.equal(counts.closed, 1, "the overlay must not be left stuck on screen");
             assert.equal(counts.reason, "deferred");
             assert.equal(request.status, "pending", "the request stays pending either way");
+        });
+    });
+
+    describe("mouse", () => {
+        const TWO_QUESTIONS: AskQuestion[] = [
+            { header: "Storage", question: "First", options: [{ label: "A" }, { label: "B" }] },
+            { header: "Auth", question: "Second", options: [{ label: "C" }, { label: "D" }] },
+        ];
+
+        /** A body several times taller than a 20-row terminal leaves room for the panel. */
+        const LONG_BODY: AskQuestion[] = [
+            {
+                question: "Which database?",
+                displayText: Array.from({ length: 30 }, (_, index) => `context line ${index}`).join("\n"),
+                options: [{ label: "Postgres" }, { label: "SQLite" }],
+            },
+        ];
+
+        const LONG_PREVIEW: AskQuestion[] = [
+            {
+                question: "Which database?",
+                options: [
+                    {
+                        label: "Postgres",
+                        preview: Array.from({ length: 30 }, (_, index) => `- preview line ${index}`).join("\n"),
+                    },
+                    { label: "SQLite", preview: "file.db" },
+                ],
+            },
+        ];
+
+        it("focuses an option on a single click without answering it", () => {
+            const { panel, request, counts } = createFixture(OPTION_QUESTIONS);
+
+            const result = click(panel, locate(panel, "2. SQLite"));
+
+            assert.equal(result.press?.handled, true);
+            assert.equal(request.draft.optionIndex, 1);
+            assert.equal(request.status, "pending", "a single click must not answer");
+            assert.equal(counts.closed, 0);
+
+            panel.handleInput(ENTER);
+            assert.deepEqual(request.answers, [{ selectedIndexes: [1] }], "Enter confirms the clicked row");
+        });
+
+        it("confirms an option on a double click", () => {
+            const { panel, request, counts } = createFixture(OPTION_QUESTIONS);
+            const at = locate(panel, "2. SQLite");
+
+            click(panel, at);
+            click(panel, at, 2);
+
+            assert.deepEqual(request.answers, [{ selectedIndexes: [1] }]);
+            assert.equal(counts.closed, 1);
+        });
+
+        it("focuses an option from its description line as well", () => {
+            const { panel, request } = createFixture(OPTION_QUESTIONS);
+
+            panel.handleInput(DOWN);
+            click(panel, locate(panel, "server"));
+
+            assert.equal(request.draft.optionIndex, 0);
+        });
+
+        it("toggles a multi-select option on a double click only", () => {
+            const { panel, request } = createFixture([
+                { question: "Pick", multiSelect: true, options: [{ label: "A" }, { label: "B" }] },
+            ]);
+            const at = locate(panel, "2. B");
+
+            click(panel, at);
+            assert.equal(request.draft.answers[0], undefined, "a single click only moves the focus");
+
+            click(panel, at, 2);
+            assert.deepEqual(request.draft.answers[0], { selectedIndexes: [1] });
+        });
+
+        it("opens the editor when the custom row is clicked", () => {
+            const { panel } = createFixture(OPTION_QUESTIONS);
+
+            click(panel, locate(panel, "Type something"));
+
+            assert.match(renderText(panel), /Your answer:/);
+            type(panel, "mysql");
+            assert.match(renderText(panel), /mysql/, "keys go to the editor after the click");
+        });
+
+        it("leaves the editor with its draft when an option is clicked", () => {
+            const { panel, request } = createFixture(OPTION_QUESTIONS);
+
+            click(panel, locate(panel, "Type something"));
+            type(panel, "mysql");
+            click(panel, locate(panel, "1. Postgres"));
+
+            assert.doesNotMatch(renderText(panel), /Your answer:/);
+            assert.equal(request.draft.optionIndex, 0);
+            assert.equal(request.draft.customDrafts[0], "mysql");
+        });
+
+        it("switches questions from the tab strip", () => {
+            const { panel, request } = createFixture(TWO_QUESTIONS);
+
+            click(panel, locate(panel, "□ Auth"));
+            assert.equal(request.draft.currentIndex, 1);
+            assert.match(renderText(panel), /Second/);
+
+            click(panel, locate(panel, "✓ Submit"));
+            assert.equal(request.draft.currentIndex, 2);
+
+            click(panel, locate(panel, "←"));
+            assert.equal(request.draft.currentIndex, 1, "the arrows step like ←/→");
+        });
+
+        it("keeps a free-form draft on its own question when another tab is clicked", () => {
+            const { panel, request } = createFixture([
+                { header: "Name", question: "Project name?" },
+                { header: "Auth", question: "Second", options: [{ label: "C" }, { label: "D" }] },
+            ]);
+
+            type(panel, "lune");
+            click(panel, locate(panel, "□ Auth"));
+
+            assert.equal(request.draft.currentIndex, 1);
+            assert.equal(request.draft.customDrafts[0], "lune");
+            assert.equal(request.draft.customDrafts[1], undefined);
+        });
+
+        it("does not confirm again on a triple click", () => {
+            const { panel, request } = createFixture(TWO_QUESTIONS);
+            const at = locate(panel, "1. A");
+
+            click(panel, at);
+            click(panel, at, 2);
+            assert.equal(request.draft.currentIndex, 1, "the double click answered the first question");
+
+            click(panel, at, 3);
+            assert.equal(request.draft.answers[1], undefined, "the third click only focuses");
+        });
+
+        it("leaves presses outside interactive rows to the text selection", () => {
+            const { panel, request } = createFixture(OPTION_QUESTIONS);
+
+            assert.equal(panel.handleMouse(mouseEvent("press", locate(panel, "Which database?"))), undefined);
+            assert.equal(panel.handleMouse(mouseEvent("press", locate(panel, "Esc close"))), undefined);
+            assert.equal(request.draft.optionIndex, 0);
+        });
+
+        it("ignores buttons other than the left one", () => {
+            const { panel, request } = createFixture(OPTION_QUESTIONS);
+
+            const result = panel.handleMouse(mouseEvent("press", locate(panel, "2. SQLite"), { button: "right" }));
+
+            assert.equal(result, undefined);
+            assert.equal(request.draft.optionIndex, 0);
+        });
+
+        it("scrolls a body taller than the panel, including back to the question", () => {
+            const { panel, request } = createFixture(LONG_BODY, { rows: 20 });
+
+            // The window starts on the focused option, which pushes the question out of view.
+            assert.doesNotMatch(renderText(panel), /Which database\?/);
+
+            const at = locate(panel, "Postgres");
+            for (let step = 0; step < 40; step++) {
+                wheel(panel, at, -1);
+            }
+
+            assert.match(renderText(panel), /Which database\?/, "the wheel reaches the top of the body");
+            assert.equal(request.draft.optionIndex, 0, "scrolling does not move the focus");
+
+            for (let step = 0; step < 40; step++) {
+                wheel(panel, locate(panel, "context line"), 1);
+            }
+
+            assert.match(renderText(panel), /write your own answer/, "and back down to the last row");
+        });
+
+        it("claims the wheel even when there is nothing to scroll", () => {
+            const { panel } = createFixture(OPTION_QUESTIONS);
+            const before = renderText(panel);
+
+            const result = wheel(panel, locate(panel, "Postgres"), 3);
+
+            assert.equal(result?.handled, true, "an unhandled wheel would scroll the transcript behind");
+            assert.equal(renderText(panel), before);
+        });
+
+        it("returns the window to the focused row on the next key", () => {
+            const { panel } = createFixture(LONG_BODY, { rows: 20 });
+            const centered = renderText(panel);
+            const at = locate(panel, "Postgres");
+
+            for (let step = 0; step < 40; step++) {
+                wheel(panel, at, -1);
+            }
+
+            panel.handleInput(DOWN);
+            panel.handleInput(UP);
+
+            assert.equal(renderText(panel), centered);
+        });
+
+        it("keeps the window still when a row is clicked", () => {
+            const { panel, request } = createFixture(LONG_BODY, { rows: 20 });
+
+            const at = locate(panel, "Postgres");
+
+            for (let step = 0; step < 2; step++) {
+                wheel(panel, at, -1);
+            }
+
+            const before = locate(panel, "2. SQLite");
+            click(panel, before);
+
+            assert.equal(request.draft.optionIndex, 1);
+            assert.deepEqual(locate(panel, "2. SQLite"), before, "the clicked row must stay under the pointer");
+        });
+
+        it("scrolls a long preview on its own", () => {
+            const { panel, request } = createFixture(LONG_PREVIEW, { rows: 40 });
+            const width = 120;
+
+            assert.match(renderText(panel, width), /preview line 0\b/);
+            const inPreview = locate(panel, "preview line 0", width);
+
+            for (let step = 0; step < 60; step++) {
+                wheel(panel, inPreview, 1);
+            }
+
+            const scrolled = renderText(panel, width);
+            assert.match(scrolled, /preview line 29/, "the wheel reaches the end of the preview");
+            assert.doesNotMatch(scrolled, /preview line 0\b/);
+            assert.match(scrolled, /↑ \d+ hidden/, "the border reports what scrolled out above");
+            assert.equal(request.draft.optionIndex, 0, "scrolling the preview does not move the focus");
+        });
+
+        it("starts another option's preview at its top", () => {
+            const { panel } = createFixture(LONG_PREVIEW, { rows: 40 });
+            const width = 120;
+            const inPreview = locate(panel, "preview line 0", width);
+
+            for (let step = 0; step < 10; step++) {
+                wheel(panel, inPreview, 1);
+            }
+
+            panel.handleInput(DOWN);
+            panel.handleInput(UP);
+
+            assert.match(renderText(panel, width), /preview line 0\b/);
+        });
+
+        it("keeps the preview box width while it scrolls", () => {
+            const { panel } = createFixture([
+                {
+                    question: "Which database?",
+                    options: [
+                        {
+                            label: "Postgres",
+                            preview: ["x", ...Array.from({ length: 30 }, () => "short"), "y".repeat(60)].join("\n"),
+                        },
+                        { label: "SQLite" },
+                    ],
+                },
+            ], { rows: 40 });
+            const width = 140;
+            const topBorder = () => renderLines(panel, width).find((line) => line.includes("┌─ Postgres"));
+            const before = topBorder();
+
+            wheel(panel, locate(panel, "short", width), 5);
+
+            assert.equal(topBorder(), before);
+        });
+
+        it("routes clicks inside the open editor to it", () => {
+            const { panel, request } = createFixture(OPTION_QUESTIONS);
+
+            click(panel, locate(panel, "Type something"));
+            type(panel, "abc");
+
+            const at = locate(panel, "abc");
+            const result = panel.handleMouse(mouseEvent("click", { x: at.x + 1, y: at.y }));
+            type(panel, "X");
+            panel.handleInput(ENTER);
+
+            assert.equal(result?.handled, true);
+            assert.deepEqual(request.answers, [{ selectedIndexes: [], customText: "aXbc" }], "the click moved the cursor");
         });
     });
 });

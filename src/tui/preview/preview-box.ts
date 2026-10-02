@@ -35,8 +35,10 @@ export function stripFenceMarkers(lines: readonly string[]): string[] {
 export interface BorderedBoxOptions {
     /** Styles the border characters. */
     colorFn: (text: string) => string;
-    /** Content rows the box could not show; replaces the bottom border with a notice. */
+    /** Content rows below the box; replaces the bottom border with a notice. */
     hidden?: number;
+    /** Content rows scrolled out above the box; reported in the same notice. */
+    hiddenAbove?: number;
     /** Drawn into the top border, so the pane names the option it belongs to. */
     title?: string;
 }
@@ -118,8 +120,13 @@ export function renderBorderedBox(
     }
 
     const hidden = options.hidden ?? 0;
+    const hiddenAbove = options.hiddenAbove ?? 0;
 
-    boxed.push(options.colorFn(hidden > 0 ? hiddenNotice(hidden, dashSpan) : `└${"─".repeat(dashSpan)}┘`));
+    boxed.push(options.colorFn(
+        hidden > 0 || hiddenAbove > 0
+            ? hiddenNotice(hiddenAbove, hidden, dashSpan)
+            : `└${"─".repeat(dashSpan)}┘`,
+    ));
 
     return boxed;
 }
@@ -145,9 +152,12 @@ function topBorder(dashSpan: number, title: string | undefined): string {
 }
 
 /** Bottom border with the hidden-line notice, kept exactly `dashSpan` columns wide. */
-function hiddenNotice(hidden: number, dashSpan: number): string {
+function hiddenNotice(above: number, below: number, dashSpan: number): string {
+    const text = above > 0
+        ? `${[`↑ ${above}`, below > 0 ? `↓ ${below}` : undefined].filter(Boolean).join(" · ")} hidden`
+        : `${below} line${below === 1 ? "" : "s"} hidden`;
     const notice = truncateToWidth(
-        ` ✂ ── ${hidden} line${hidden === 1 ? "" : "s"} hidden ── `,
+        ` ✂ ── ${text} ── `,
         dashSpan,
         "…",
     );

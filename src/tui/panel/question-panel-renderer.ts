@@ -50,6 +50,12 @@ import {
 
 /** Minimum inner width so the frame math never produces negative repeat counts. */
 const PANEL_MIN_INNER_WIDTH = 20;
+/** Top border, header and the separator above the body. */
+const BODY_TOP = 3;
+/** Left border plus the cell's leading space. */
+const CONTENT_LEFT = 2;
+/** The editor is drawn one column in from the content edge. */
+const EDITOR_INSET = 1;
 
 /** The editor while it owns the keys: only its rendered lines are needed here. */
 export interface QuestionPanelEditor {
@@ -63,6 +69,59 @@ export interface QuestionPanelRenderState {
     maxBodyHeight: number;
     /** Editor to draw below the options; absent unless `inputMode` is set. */
     editor?: QuestionPanelEditor;
+    /** First body row to show; `undefined` keeps the focused row centered. */
+    bodyScroll?: number;
+    /** First preview content row to show. */
+    previewScroll?: number;
+}
+
+/** Panel-local column span `[start, end)` on one row. */
+export interface PanelSpan {
+    y: number;
+    start: number;
+    end: number;
+}
+
+/** Panel-local rectangle; `x`/`y` is the top-left cell. */
+export interface PanelRect {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+}
+
+export type TabTarget = { kind: "tab"; index: number } | { kind: "step"; step: number };
+
+/**
+ * Where the last frame put each interactive element. Mouse events arrive in overlay-local
+ * cells, so hit-testing has to use the geometry the user actually sees.
+ */
+export interface QuestionPanelLayout {
+    tabs: Array<PanelSpan & { target: TabTarget }>;
+    /** Visible lines of each option row; `rowIndex` is its position in `questionRows`. */
+    rows: Array<PanelSpan & { rowIndex: number }>;
+    body: PanelRect & { offset: number; maxOffset: number };
+    preview?: PanelRect & { offset: number; maxOffset: number };
+    /** The editor's full extent, `y` possibly outside the body window when it is scrolled. */
+    editor?: PanelRect;
+}
+
+export interface QuestionPanelFrame {
+    lines: string[];
+    layout: QuestionPanelLayout;
+}
+
+/** Body-relative positions collected while the body is built. */
+interface BodyMarks {
+    rows: Array<{ line: number; end: number; rowIndex: number }>;
+    preview?: { line: number; height: number; start: number; width: number; offset: number; maxOffset: number };
+    editor?: { line: number; height: number; width: number };
+}
+
+interface RenderedBody {
+    lines: string[];
+    focusLine: number;
+    marks: BodyMarks;
 }
 
 export interface QuestionPanelRendererOptions {
@@ -87,22 +146,33 @@ export class QuestionPanelRenderer {
         this.theme = options.theme;
     }
 
-    render(width: number, state: QuestionPanelRenderState): string[] {
+    render(width: number, state: QuestionPanelRenderState): QuestionPanelFrame {
         const innerWidth = Math.max(PANEL_MIN_INNER_WIDTH, width - 2);
         const contentWidth = innerWidth - 2;
         // The tab strip stays put while the body scrolls. It is the only way to see which
         // questions exist and to reach the others, so it must not scroll out of view.
-        const tabs = this.isMultiQuestion ? this.renderTabsBlock(contentWidth) : [];
-        const bodyRoom = Math.max(1, state.maxBodyHeight - tabs.length);
-        const { lines: body, focusLine } = this.renderBody(contentWidth, bodyRoom, state);
-        const bodyHeight = Math.min(body.length, bodyRoom);
-        const visible = [...tabs, ...sliceWindow(body, focusLine, bodyHeight)];
+        const tabs = this.isMultiQuestion
+            ? this.renderTabsBlock(contentWidth)
+            : { lines: [], spans: [] };
+        const bodyRoom = Math.max(1, state.maxBodyHeight - tabs.lines.length);
+        const body = this.renderBody(contentWidth, bodyRoom, state);
+        const bodyHeight = Math.min(body.lines.length, bodyRoom);
+        const window = bodyWindow(body.lines.length, body.focusLine, bodyHeight, state.bodyScroll);
+        const visible = [...tabs.lines, ...body.lines.slice(window.offset, window.offset + bodyHeight)];
 
-        while (visible.length < tabs.length + bodyHeight) {
+        while (visible.length < tabs.lines.length + bodyHeight) {
             visible.push("");
         }
 
-        return [
+        const layout = this.layoutFor(tabs.spans, body.marks, {
+            x: CONTENT_LEFT,
+            y: BODY_TOP + tabs.lines.length,
+            width: contentWidth,
+            height: bodyHeight,
+            ...window,
+        });
+
+        const lines = [
             this.frame(`┌${"─".repeat(innerWidth)}┐`),
             this.frame("│") + this.renderHeader(innerWidth) + this.frame("│"),
             this.frame(`├${"─".repeat(innerWidth)}┤`),
@@ -111,6 +181,56 @@ export class QuestionPanelRenderer {
             this.frame("│") + this.renderFooter(innerWidth, state.inputMode) + this.frame("│"),
             this.frame(`└${"─".repeat(innerWidth)}┘`),
         ];
+
+        return { lines, layout };
+    }
+
+    /** Moves the body-relative marks into panel coordinates, keeping only what is on screen. */
+    private layoutFor(
+        tabs: QuestionPanelLayout["tabs"],
+        marks: BodyMarks,
+        body: QuestionPanelLayout["body"],
+    ): QuestionPanelLayout {
+        const toPanel = (line: number) => body.y + line - body.offset;
+        const onScreen = (line: number) => line >= body.offset && line < body.offset + body.height;
+
+        const rows = marks.rows
+            .filter((row) => onScreen(row.line))
+            .map((row) => ({
+                y: toPanel(row.line),
+                start: body.x,
+                end: body.x + row.end,
+                rowIndex: row.rowIndex,
+            }));
+
+        const layout: QuestionPanelLayout = { tabs, rows, body };
+
+        if (marks.preview) {
+            const top = Math.max(marks.preview.line, body.offset);
+            const bottom = Math.min(marks.preview.line + marks.preview.height, body.offset + body.height);
+
+            if (bottom > top) {
+                layout.preview = {
+                    x: body.x + marks.preview.start,
+                    y: toPanel(top),
+                    width: marks.preview.width,
+                    height: bottom - top,
+                    offset: marks.preview.offset,
+                    maxOffset: marks.preview.maxOffset,
+                };
+            }
+        }
+
+        if (marks.editor) {
+            layout.editor = {
+                x: body.x + EDITOR_INSET,
+                y: toPanel(marks.editor.line),
+                width: marks.editor.width,
+                height: marks.editor.height,
+            };
+        }
+
+        return layout;
     }
 
     invalidate(): void {
@@ -179,19 +299,20 @@ export class QuestionPanelRenderer {
         contentWidth: number,
         maxBodyHeight: number,
         state: QuestionPanelRenderState,
-    ): { lines: string[]; focusLine: number } {
+    ): RenderedBody {
         const lines: string[] = [];
+        const marks: BodyMarks = { rows: [] };
 
         if (this.isSubmitTab) {
             lines.push(...this.renderSubmit(contentWidth));
 
-            return { lines, focusLine: 0 };
+            return { lines, focusLine: 0, marks };
         }
 
         const question = this.currentQuestion();
 
         if (!question) {
-            return { lines, focusLine: 0 };
+            return { lines, focusLine: 0, marks };
         }
 
         // One question needs no label at all: the tab strip is what names the questions, and
@@ -219,24 +340,37 @@ export class QuestionPanelRenderer {
             lines.length,
             maxBodyHeight,
             state.inputMode,
+            state.previewScroll ?? 0,
         );
-        const focusLine = lines.length + region.focusLine;
+        const regionTop = lines.length;
+        const focusLine = regionTop + region.focusLine;
         lines.push(...region.lines);
+
+        marks.rows = region.rows.map((row) => ({ ...row, line: regionTop + row.line }));
+
+        if (region.preview) {
+            marks.preview = { ...region.preview, line: regionTop + region.preview.line };
+        }
 
         if (state.inputMode && state.editor) {
             lines.push("");
             pushWrapped(lines, contentWidth, " ", this.theme.fg("muted", "Your answer:"));
 
             // The editor draws its own frame; one column keeps it inside the panel border.
-            for (const line of state.editor.render(Math.max(1, contentWidth - 2))) {
-                lines.push(truncateToWidth(` ${line}`, contentWidth, "…", true));
+            const editorWidth = Math.max(1, contentWidth - 2);
+            const editorLines = state.editor.render(editorWidth);
+
+            marks.editor = { line: lines.length, height: editorLines.length, width: editorWidth };
+
+            for (const line of editorLines) {
+                lines.push(truncateToWidth(`${" ".repeat(EDITOR_INSET)}${line}`, contentWidth, "…", true));
             }
 
             lines.push("");
             pushWrapped(lines, contentWidth, " ", this.theme.fg("dim", "Enter to submit · Esc to go back"));
         }
 
-        return { lines, focusLine };
+        return { lines, focusLine, marks };
     }
 
     /**
@@ -246,8 +380,8 @@ export class QuestionPanelRenderer {
      * block is capped to what the window has left, because a block that overflows it would be
      * clipped at the bottom and lose its border.
      *
-     * The returned `focusLine` is relative to the returned lines, so the caller can offset it
-     * against the full-width body above.
+     * The returned `focusLine` and marks are relative to the returned lines, so the caller can
+     * offset them against the full-width body above.
      */
     private renderQuestionRegion(
         question: AskQuestion,
@@ -255,7 +389,8 @@ export class QuestionPanelRenderer {
         rowsAboveRegion: number,
         maxBodyHeight: number,
         inputMode: boolean,
-    ): { lines: string[]; focusLine: number } {
+        previewScroll: number,
+    ): OptionRegion {
         const renderer = this.previewRendererFor(this.draft.currentIndex, question);
 
         // While the editor is open the focused row is the custom row, which has no preview of
@@ -283,27 +418,47 @@ export class QuestionPanelRenderer {
             this.draft.optionIndex,
             columns.rightWidth,
             previewBlockRowBudget(mode, available),
+            previewScroll,
         );
+        const scroll = { offset: block.offset, maxOffset: block.maxOffset };
 
         if (mode === "stacked") {
             return {
                 lines: [...rows.lines, ...Array<string>(stackedGap).fill(""), ...block.lines],
                 focusLine: rows.focusLine,
+                rows: rows.rows,
+                preview: {
+                    line: rows.lines.length + stackedGap,
+                    height: block.lines.length,
+                    start: 0,
+                    width: contentWidth,
+                    ...scroll,
+                },
             };
         }
 
-        return composeColumns(rows, block.lines, columns, contentWidth);
+        const previewStart = columns.leftWidth + columns.gap;
+
+        return {
+            ...composeColumns(rows, block.lines, columns, contentWidth),
+            rows: rows.rows,
+            preview: {
+                line: 0,
+                height: block.lines.length,
+                start: previewStart,
+                width: contentWidth - previewStart,
+                ...scroll,
+            },
+        };
     }
 
     /** One option row block, wrapped to `contentWidth`. */
-    private renderOptionRows(
-        question: AskQuestion,
-        contentWidth: number,
-    ): { lines: string[]; focusLine: number } {
+    private renderOptionRows(question: AskQuestion, contentWidth: number): OptionRegion {
         const lines: string[] = [];
         const rows = questionRows(question);
         const focusedIndex = focusedRowIndex(rows, this.draft.optionIndex);
         const answer = this.draft.answers[this.draft.currentIndex];
+        const marks: OptionRegion["rows"] = [];
         let focusLine = 0;
 
         for (const [rowIndex, row] of rows.entries()) {
@@ -313,10 +468,13 @@ export class QuestionPanelRenderer {
                 focusLine = lines.length;
             }
 
-            lines.push(...this.renderRow(question, row, focused, answer, contentWidth));
+            for (const line of this.renderRow(question, row, focused, answer, contentWidth)) {
+                marks.push({ line: lines.length, end: contentWidth, rowIndex });
+                lines.push(line);
+            }
         }
 
-        return { lines, focusLine };
+        return { lines, focusLine, rows: marks };
     }
 
     private previewRendererFor(questionIndex: number, question: AskQuestion): QuestionPreviewRenderer {
@@ -337,39 +495,83 @@ export class QuestionPanelRenderer {
         return renderer;
     }
 
-    /** Tab strip plus the blank row that separates it from the body below. */
-    private renderTabsBlock(contentWidth: number): string[] {
+    /**
+     * Tab strip plus the blank row that separates it from the body below.
+     *
+     * The strip wraps between tabs, never inside one, so every tab stays one clickable span.
+     */
+    private renderTabsBlock(contentWidth: number): { lines: string[]; spans: QuestionPanelLayout["tabs"] } {
         const lines: string[] = [];
+        const spans: QuestionPanelLayout["tabs"] = [];
+        let line = "";
+        let column = 0;
 
-        pushWrapped(lines, contentWidth, "", this.renderTabs());
-        lines.push("");
+        for (const segment of this.tabSegments()) {
+            const text = truncateToWidth(segment.text, contentWidth, "…");
+            const width = visibleWidth(text);
 
-        return lines;
+            if (column > 0 && column + width > contentWidth) {
+                if (segment.target === undefined) {
+                    // A separator space must not start the next line.
+                    continue;
+                }
+
+                lines.push(line);
+                line = "";
+                column = 0;
+            }
+
+            if (segment.target) {
+                spans.push({
+                    y: BODY_TOP + lines.length,
+                    start: CONTENT_LEFT + column,
+                    end: CONTENT_LEFT + column + width,
+                    target: segment.target,
+                });
+            }
+
+            line += segment.style(text);
+            column += width;
+        }
+
+        lines.push(line, "");
+
+        return { lines, spans };
     }
 
-    private renderTabs(): string {
-        const parts: string[] = ["← "];
+    private tabSegments(): Array<{ text: string; style: (text: string) => string; target?: TabTarget }> {
+        const plain = (text: string) => text;
+        const segments: ReturnType<QuestionPanelRenderer["tabSegments"]> = [
+            { text: "←", style: plain, target: { kind: "step", step: -1 } },
+            { text: " ", style: plain },
+        ];
 
         for (const [index, question] of this.questions.entries()) {
             const answered = this.draft.answers[index] !== undefined;
             const active = !this.isSubmitTab && index === this.draft.currentIndex;
-            const text = ` ${answered ? "■" : "□"} ${questionTabLabel(question)} `;
 
-            parts.push(active
-                ? this.theme.bg("selectedBg", this.theme.fg("text", text))
-                : this.theme.fg(answered ? "success" : "muted", text));
-            parts.push(" ");
+            segments.push({
+                text: ` ${answered ? "■" : "□"} ${questionTabLabel(question)} `,
+                style: (text) => active
+                    ? this.theme.bg("selectedBg", this.theme.fg("text", text))
+                    : this.theme.fg(answered ? "success" : "muted", text),
+                target: { kind: "tab", index },
+            });
+            segments.push({ text: " ", style: plain });
         }
 
-        const submitActive = this.isSubmitTab;
-        const submit = " ✓ Submit ";
+        segments.push(
+            {
+                text: " ✓ Submit ",
+                style: (text) => this.isSubmitTab
+                    ? this.theme.bg("selectedBg", this.theme.fg("text", text))
+                    : this.theme.fg(this.allAnswered() ? "success" : "dim", text),
+                target: { kind: "tab", index: this.questions.length },
+            },
+            { text: "→", style: plain, target: { kind: "step", step: 1 } },
+        );
 
-        parts.push(submitActive
-            ? this.theme.bg("selectedBg", this.theme.fg("text", submit))
-            : this.theme.fg(this.allAnswered() ? "success" : "dim", submit));
-        parts.push("→");
-
-        return parts.join("");
+        return segments;
     }
 
     private renderRow(
@@ -510,12 +712,28 @@ export class QuestionPanelRenderer {
     }
 }
 
-/** Window over the body that keeps the focused row visible without following the tail. */
-function sliceWindow(lines: readonly string[], focusLine: number, height: number): string[] {
-    const maxOffset = Math.max(0, lines.length - height);
-    const offset = Math.min(maxOffset, Math.max(0, focusLine - Math.floor(height / 2)));
+/** Option rows, optionally with the preview block, and where each part landed. */
+interface OptionRegion {
+    lines: string[];
+    focusLine: number;
+    rows: Array<{ line: number; end: number; rowIndex: number }>;
+    preview?: NonNullable<BodyMarks["preview"]>;
+}
 
-    return lines.slice(offset, offset + height);
+/**
+ * Window over the body. Without an explicit scroll it keeps the focused row visible without
+ * following the tail; a wheel scroll pins it wherever the user left it.
+ */
+function bodyWindow(
+    length: number,
+    focusLine: number,
+    height: number,
+    scroll: number | undefined,
+): { offset: number; maxOffset: number } {
+    const maxOffset = Math.max(0, length - height);
+    const wanted = scroll ?? focusLine - Math.floor(height / 2);
+
+    return { offset: Math.min(maxOffset, Math.max(0, wanted)), maxOffset };
 }
 
 /**
@@ -525,23 +743,26 @@ function sliceWindow(lines: readonly string[], focusLine: number, height: number
  * instead of leaving an invisible tail of blank columns.
  */
 function composeColumns(
-    left: { lines: readonly string[]; focusLine: number },
+    left: { lines: readonly string[]; focusLine: number; rows: OptionRegion["rows"] },
     right: readonly string[],
     columns: { leftWidth: number; rightWidth: number; gap: number },
     contentWidth: number,
-): { lines: string[]; focusLine: number } {
+): { lines: string[]; focusLine: number; rows: OptionRegion["rows"] } {
     const gap = " ".repeat(columns.gap);
-    const rows = Math.max(left.lines.length, right.length);
+    const height = Math.max(left.lines.length, right.length);
     const lines: string[] = [];
 
-    for (let index = 0; index < rows; index++) {
+    for (let index = 0; index < height; index++) {
         const leftCell = padEndCell(left.lines[index] ?? "", columns.leftWidth);
         const rightCell = padStartCell(right[index] ?? "", columns.rightWidth);
 
         lines.push(truncateToWidth(`${leftCell}${gap}${rightCell}`, contentWidth, "…", true));
     }
 
-    return { lines, focusLine: left.focusLine };
+    // A click on the gap or the preview must not pick the option on the same row.
+    const rows = left.rows.map((row) => ({ ...row, end: Math.min(row.end, columns.leftWidth) }));
+
+    return { lines, focusLine: left.focusLine, rows };
 }
 
 function padEndCell(text: string, width: number): string {

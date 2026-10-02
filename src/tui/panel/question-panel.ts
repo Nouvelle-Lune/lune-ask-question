@@ -12,6 +12,8 @@ import {
     type Focusable,
     type KeybindingsManager,
     type TUI,
+    type TuiMouseEvent,
+    type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 
 import {
@@ -20,7 +22,12 @@ import {
     type AskQuestionRequest,
 } from "../../core/questionManager.ts";
 import { QuestionPanelController } from "./question-panel-controller.ts";
-import { QuestionPanelRenderer } from "./question-panel-renderer.ts";
+import {
+    QuestionPanelRenderer,
+    type PanelRect,
+    type PanelSpan,
+    type QuestionPanelLayout,
+} from "./question-panel-renderer.ts";
 
 const OVERLAY_WIDTH = "80%";
 const OVERLAY_MIN_WIDTH = 70;
@@ -197,6 +204,12 @@ export class QuestionPanel implements Component, Focusable {
     private readonly editor: Editor;
     private inputMode = false;
 
+    /** Geometry of the last frame, for mouse hit-testing. */
+    private layout: QuestionPanelLayout | undefined;
+    /** Wheel position of the body; `undefined` lets the window follow the focused row. */
+    private bodyScroll: number | undefined;
+    private previewScroll = 0;
+
     constructor(options: QuestionPanelOptions) {
         this.request = options.request;
         this.keybindings = options.keybindings;
@@ -232,6 +245,12 @@ export class QuestionPanel implements Component, Focusable {
     }
 
     handleInput(data: string): void {
+        // A key moves the focus, so the window goes back to following it.
+        this.bodyScroll = undefined;
+        this.withPreviewReset(() => this.handleKey(data));
+    }
+
+    private handleKey(data: string): void {
         if (this.inputMode) {
             // Esc belongs to the editor first: it drops back to the options while keeping
             // what was written, and only a second Esc defers the whole panel.
@@ -314,15 +333,83 @@ export class QuestionPanel implements Component, Focusable {
         }
     }
 
+    /**
+     * Fullscreen mode routes the mouse here; regular mode leaves it to the terminal, so every
+     * action below also has a key. Presses that hit nothing interactive stay unhandled, which
+     * keeps the TUI's text selection for copying out of the panel.
+     */
+    handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+        const layout = this.layout;
+
+        if (!layout) {
+            return undefined;
+        }
+
+        if (event.type === "wheel") {
+            // Claimed even when nothing moves: an unhandled wheel scrolls the transcript behind.
+            return { handled: true, render: this.scrollBy(layout, event) };
+        }
+
+        if (event.button !== "left") {
+            return undefined;
+        }
+
+        if (this.inputMode && layout.editor && insideRect(layout.editor, event) && insideRect(layout.body, event)) {
+            return this.editor.handleMouse({
+                ...event,
+                x: event.x - layout.editor.x,
+                y: event.y - layout.editor.y,
+                width: layout.editor.width,
+                height: layout.editor.height,
+            });
+        }
+
+        if (event.type === "press") {
+            return this.withPreviewReset(() => this.pressAt(layout, event));
+        }
+
+        if (event.type === "click") {
+            return this.withPreviewReset(() => this.clickAt(layout, event));
+        }
+
+        return undefined;
+    }
+
+    /**
+     * A preview belongs to one option, so moving the focus away and back starts it at its top;
+     * another question starts with the window on its focused row.
+     */
+    private withPreviewReset<T>(action: () => T): T {
+        const question = this.draft.currentIndex;
+        const option = this.draft.optionIndex;
+        const result = action();
+
+        if (this.draft.currentIndex !== question) {
+            this.bodyScroll = undefined;
+        }
+
+        if (this.draft.currentIndex !== question || this.draft.optionIndex !== option) {
+            this.previewScroll = 0;
+        }
+
+        return result;
+    }
+
     render(width: number): string[] {
         // The hardware cursor belongs to the editor only while it owns the keys.
         this.editor.focused = this.focused && this.inputMode;
 
-        return this.renderer.render(width, {
+        const frame = this.renderer.render(width, {
             inputMode: this.inputMode,
             maxBodyHeight: this.maxBodyHeight(),
             editor: this.inputMode ? this.editor : undefined,
+            bodyScroll: this.bodyScroll,
+            previewScroll: this.previewScroll,
         });
+
+        this.layout = frame.layout;
+
+        return frame.lines;
     }
 
     invalidate(): void {
@@ -331,6 +418,101 @@ export class QuestionPanel implements Component, Focusable {
 
     private get draft(): AskQuestionDraft {
         return this.request.draft;
+    }
+
+    /**
+     * The preview under the pointer scrolls first; at its limits the wheel stays with it.
+     *
+     * Renders are batched, so several wheel events can arrive against one frame: each step
+     * builds on the scroll already requested, not on the offset that frame drew.
+     */
+    private scrollBy(layout: QuestionPanelLayout, event: TuiMouseEvent): boolean {
+        const delta = event.wheelDelta ?? 0;
+        const preview = layout.preview;
+
+        if (preview && preview.maxOffset > 0 && insideRect(preview, event)) {
+            const current = clamp(this.previewScroll, 0, preview.maxOffset);
+            const next = clamp(current + delta, 0, preview.maxOffset);
+
+            this.previewScroll = next;
+            return next !== current;
+        }
+
+        const body = layout.body;
+        const current = clamp(this.bodyScroll ?? body.offset, 0, body.maxOffset);
+        const next = clamp(current + delta, 0, body.maxOffset);
+
+        this.bodyScroll = next;
+        return next !== current;
+    }
+
+    private pressAt(layout: QuestionPanelLayout, event: TuiMouseEvent): TuiMouseEventResult | undefined {
+        const tab = layout.tabs.find((span) => insideSpan(span, event));
+
+        if (tab) {
+            const target = tab.target;
+
+            if (target.kind === "step" || target.index !== this.draft.currentIndex) {
+                // Before the switch: the draft is stored under the question being left.
+                this.leaveEditorForTab();
+
+                if (target.kind === "step") {
+                    this.moveTab(target.step);
+                } else {
+                    this.controller.selectTab(target.index);
+                    this.inputMode = false;
+                    this.syncAutoInputMode();
+                }
+            }
+
+            this.requestRender();
+            return { handled: true, focus: true };
+        }
+
+        const hit = layout.rows.find((span) => insideSpan(span, event));
+        const row = hit === undefined ? undefined : this.controller.focusRow(hit.rowIndex);
+
+        if (!row) {
+            return undefined;
+        }
+
+        // Following the new focus would re-center the window and slide another row under the
+        // pointer before the second press of a double click.
+        this.bodyScroll = layout.body.offset;
+
+        if (row.kind === "custom") {
+            if (!this.inputMode) {
+                this.enterInputMode();
+            }
+        } else if (this.inputMode) {
+            this.exitInputMode();
+        }
+
+        this.requestRender();
+        return { handled: true, focus: true };
+    }
+
+    /** A press already focused the row; a double click is what confirms it, like `Enter`. */
+    private clickAt(layout: QuestionPanelLayout, event: TuiMouseEvent): TuiMouseEventResult | undefined {
+        const hit = layout.rows.find((span) => insideSpan(span, event));
+
+        if (!hit) {
+            return layout.tabs.some((span) => insideSpan(span, event)) ? { handled: true } : undefined;
+        }
+
+        // Only the second click: a third one would land on whatever the answer advanced to.
+        if (event.clickCount === 2 && this.controller.focusedRow()?.kind !== "custom") {
+            this.confirmRow();
+        }
+
+        return { handled: true };
+    }
+
+    /** Moving away by mouse must keep what was typed, as `Esc` does. */
+    private leaveEditorForTab(): void {
+        if (this.inputMode) {
+            this.captureEditorDraft();
+        }
     }
 
     private moveRow(step: number): void {
@@ -538,6 +720,19 @@ export class QuestionPanel implements Component, Focusable {
 
         return Math.max(1, usable - FRAME_HEIGHT);
     }
+}
+
+function insideRect(rect: PanelRect, event: TuiMouseEvent): boolean {
+    return event.x >= rect.x && event.x < rect.x + rect.width
+        && event.y >= rect.y && event.y < rect.y + rect.height;
+}
+
+function insideSpan(span: PanelSpan, event: TuiMouseEvent): boolean {
+    return event.y === span.y && event.x >= span.start && event.x < span.end;
+}
+
+function clamp(value: number, min: number, max: number): number {
+    return Math.min(max, Math.max(min, value));
 }
 
 /** A single printable character, as opposed to an escape sequence or a control key. */

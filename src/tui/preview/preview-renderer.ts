@@ -41,8 +41,12 @@ export interface QuestionPreviewRendererOptions {
 export interface PreviewBlock {
     /** Box lines, borders included; the caller pads them into its preview column. */
     lines: string[];
-    /** Content rows the block could not show; reported in its bottom border. */
+    /** Content rows the block could not show, above and below; reported in its bottom border. */
     hidden: number;
+    /** First content row shown, after clamping the requested scroll. */
+    offset: number;
+    /** Largest scroll offset that still fills the block. */
+    maxOffset: number;
 }
 
 export class QuestionPreviewRenderer {
@@ -64,7 +68,7 @@ export class QuestionPreviewRenderer {
         return this.hasPreview;
     }
 
-    render(optionIndex: number, width: number, maxBlockRows: number): PreviewBlock {
+    render(optionIndex: number, width: number, maxBlockRows: number, scrollOffset = 0): PreviewBlock {
         const maxInnerWidth = Math.max(
             1,
             width - BORDER_HORIZONTAL_OVERHEAD - 2 * BORDER_INNER_PADDING_HORIZONTAL,
@@ -72,17 +76,23 @@ export class QuestionPreviewRenderer {
         const contentBudget = Math.max(1, maxBlockRows - BORDER_VERTICAL_OVERHEAD);
         const title = this.question.options?.[optionIndex]?.label;
         const raw = this.contentLines(optionIndex, maxInnerWidth);
-        const hidden = Math.max(0, raw.length - contentBudget);
-        const visible = hidden > 0 ? raw.slice(0, contentBudget) : raw;
-        const boxWidth = computeBoxWidth(visible, maxInnerWidth, title);
+        const maxOffset = Math.max(0, raw.length - contentBudget);
+        const offset = Math.min(maxOffset, Math.max(0, scrollOffset));
+        const visible = raw.slice(offset, offset + contentBudget);
+        const hiddenBelow = raw.length - offset - visible.length;
+        // Measured on the whole preview so the box does not change width while it scrolls.
+        const boxWidth = computeBoxWidth(raw, maxInnerWidth, title);
 
         return {
             lines: renderBorderedBox(visible, boxWidth, {
                 colorFn: (text) => this.theme.fg("border", text),
-                hidden,
+                hidden: hiddenBelow,
+                hiddenAbove: offset,
                 title,
             }),
-            hidden,
+            hidden: offset + hiddenBelow,
+            offset,
+            maxOffset,
         };
     }
 
