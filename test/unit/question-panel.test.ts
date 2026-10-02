@@ -3,6 +3,7 @@ import { beforeEach, describe, it } from "node:test";
 
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import {
+    CURSOR_MARKER,
     stripTerminalSequences,
     visibleWidth,
     type TuiMouseEvent,
@@ -691,6 +692,21 @@ describe("question panel", () => {
             { question: "Second", options: [{ label: "C" }, { label: "D" }] },
         ];
 
+        /** A question whose body is taller than the panel's row budget, so the window scrolls. */
+        const TALL_QUESTIONS: AskQuestion[] = [
+            {
+                header: "Storage",
+                question: "Which database should the service use?",
+                displayText: Array.from({ length: 14 }, (_, index) => `context line ${index}`).join("\n"),
+                options: [
+                    { label: "Postgres", description: "Managed server" },
+                    { label: "SQLite" },
+                    { label: "DuckDB" },
+                    { label: "Redis" },
+                ],
+            },
+        ];
+
         /** The `✎` row is what the user picks to write an answer instead of choosing an option. */
         function customRow(panel: QuestionPanel): string {
             const row = innerLines(panel).find((line) => line.includes("✎"));
@@ -868,6 +884,78 @@ describe("question panel", () => {
 
             assert.match(customRow(panel), /mysql/);
             assert.equal(customRow(panel).includes("mysql-8"), false, "the row must not follow the edit");
+        });
+
+        it("keeps the input box and its cursor in view while the answer grows", () => {
+            const { panel } = createFixture(TALL_QUESTIONS, { rows: 30 });
+
+            // Four options down to the custom row, then an answer taller than the window.
+            for (let step = 0; step < 4; step++) {
+                panel.handleInput(DOWN);
+            }
+
+            type(panel, "answer ".repeat(120));
+
+            // The TUI is what focuses an overlay; the marker only exists while it owns the keys.
+            panel.focused = true;
+            const raw = panel.render(80);
+            const lines = raw.map((line) => stripTerminalSequences(line));
+
+            assert.ok(
+                raw.some((line) => line.includes(CURSOR_MARKER)),
+                `the newest line and its cursor must stay in view: ${JSON.stringify(lines)}`,
+            );
+            const frameRows = lines.filter(
+                // The top border carries a `↑ N more` notice, so count dash rows inside the frame.
+                (line) => line.startsWith("│") && line.endsWith("│") && line.includes("─".repeat(20)),
+            );
+
+            assert.equal(frameRows.length, 2, `the editor frame must stay whole: ${JSON.stringify(lines)}`);
+            assert.match(
+                lines.join("\n"),
+                /Enter to submit · Esc to go back/,
+                "the hint under the editor belongs to the input box",
+            );
+        });
+
+        it("keeps a free-form answer visible on a short terminal", () => {
+            const { panel } = createFixture(
+                [{ header: "Notes", question: "Anything else worth knowing?" }],
+                { rows: 20 },
+            );
+
+            panel.focused = true;
+            type(panel, "x".repeat(400));
+
+            const raw = panel.render(70);
+            const lines = raw.map((line) => stripTerminalSequences(line));
+
+            assert.ok(
+                raw.some((line) => line.includes(CURSOR_MARKER)),
+                `a short terminal must not cut the cursor off: ${JSON.stringify(lines)}`,
+            );
+        });
+
+        it("does not pull a wheel scroll back to the editor", () => {
+            const { panel } = createFixture(TALL_QUESTIONS, { rows: 30 });
+
+            for (let step = 0; step < 4; step++) {
+                panel.handleInput(DOWN);
+            }
+
+            type(panel, "answer ".repeat(120));
+
+            const at = locate(panel, "Your answer:");
+
+            for (let step = 0; step < 40; step++) {
+                wheel(panel, at, -1);
+            }
+
+            assert.match(
+                renderText(panel),
+                /Which database should the service use\?/,
+                "the reader's own scroll position outranks following the editor",
+            );
         });
     });
 

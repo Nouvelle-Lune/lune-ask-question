@@ -39,6 +39,7 @@
 - **A failed snapshot no longer sticks the panel.** `Esc` wrote the snapshot before closing the overlay, so a throwing `appendEntry` left the panel up with no way out, and the same throw could cut short a shutdown or a tree switch. Persistence now reports the failure instead of raising it, and the overlay closes either way.
 - **The dock follows the request `/question` would reopen.** `markShown` moved a request behind the ones it had already been shown after without emitting an event, so the dock could name one question while `/question` opened another. It now emits `request-shown`, which also writes the new order to the session immediately instead of at the next settle point.
 - **A snapshot that could not be written is reported.** Listener failures were swallowed, which could hide a persistence error while the in-memory state moved on. The manager reports them, and the extension says that the question state could not be saved.
+- **The open editor is no longer clipped while the answer grows.** The body window followed the focused option row, so an answer taller than the room left under the question pushed the editor's bottom border, the `Enter to submit` hint and the cursor past the panel's bottom edge - the newest lines looked like they had left the input box. While the editor owns the keys the window now scrolls to hold the whole editor block, falling back to the cursor line when the block itself cannot fit, and a wheel scroll still pins wherever the reader left it.
 
 ### Refactored
 

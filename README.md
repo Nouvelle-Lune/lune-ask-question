@@ -23,7 +23,7 @@ pi install git:github.com/Nouvelle-Lune/lune-ask-question
 - **A question waits as long as you need.** `Esc` closes the panel without settling anything: a dock below the editor says a question is still pending, and `/question` reopens it with the focused row and your drafts intact.
 - **Survives a restart.** A pending question and what you had written come back after `/reload`, `/resume` or `/tree`.
 - **Compares options before answering.** An option can carry a Markdown preview - a diff, a config block, a mockup - in a pane beside the options, side by side on a wide terminal and stacked under them on a narrow one. A preview is only for you: it never becomes the answer.
-- **Only as tall as its content.** A short question covers as little of the transcript as possible; a long one scrolls, with the tab strip pinned above the body.
+- **Only as tall as its content.** A short question covers as little of the transcript as possible; a long one scrolls, with the tab strip pinned above the body. While you are writing an answer, the body scrolls with you to keep the whole input box - and its cursor - in view instead of clipping the newest lines.
 
 ## Panel
 

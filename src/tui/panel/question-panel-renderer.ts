@@ -15,6 +15,7 @@ import {
     type ThemeColor,
 } from "@earendil-works/pi-coding-agent";
 import {
+    CURSOR_MARKER,
     Markdown,
     truncateToWidth,
     visibleWidth,
@@ -122,6 +123,11 @@ interface RenderedBody {
     lines: string[];
     focusLine: number;
     marks: BodyMarks;
+    /**
+     * Body rows the window has to hold while the editor owns the keys. Content above scrolls
+     * away instead of the input box being clipped at the panel's bottom edge.
+     */
+    keep?: { top: number; bottom: number; cursor: number };
 }
 
 export interface QuestionPanelRendererOptions {
@@ -157,7 +163,13 @@ export class QuestionPanelRenderer {
         const bodyRoom = Math.max(1, state.maxBodyHeight - tabs.lines.length);
         const body = this.renderBody(contentWidth, bodyRoom, state);
         const bodyHeight = Math.min(body.lines.length, bodyRoom);
-        const window = bodyWindow(body.lines.length, body.focusLine, bodyHeight, state.bodyScroll);
+        const window = bodyWindow(
+            body.lines.length,
+            body.focusLine,
+            bodyHeight,
+            state.bodyScroll,
+            body.keep,
+        );
         const visible = [...tabs.lines, ...body.lines.slice(window.offset, window.offset + bodyHeight)];
 
         while (visible.length < tabs.lines.length + bodyHeight) {
@@ -302,6 +314,7 @@ export class QuestionPanelRenderer {
     ): RenderedBody {
         const lines: string[] = [];
         const marks: BodyMarks = { rows: [] };
+        let keep: RenderedBody["keep"];
 
         if (this.isSubmitTab) {
             lines.push(...this.renderSubmit(contentWidth));
@@ -359,6 +372,7 @@ export class QuestionPanelRenderer {
             // The editor draws its own frame; one column keeps it inside the panel border.
             const editorWidth = Math.max(1, contentWidth - 2);
             const editorLines = state.editor.render(editorWidth);
+            const cursor = editorLines.findIndex((line) => line.includes(CURSOR_MARKER));
 
             marks.editor = { line: lines.length, height: editorLines.length, width: editorWidth };
 
@@ -368,9 +382,17 @@ export class QuestionPanelRenderer {
 
             lines.push("");
             pushWrapped(lines, contentWidth, " ", this.theme.fg("dim", "Enter to submit · Esc to go back"));
+
+            // The editor owns the keys, so the window follows it instead of the focused option
+            // row: the frame and the submit hint stay whole, and only the rows above scroll.
+            keep = {
+                top: marks.editor.line,
+                bottom: lines.length - 1,
+                cursor: marks.editor.line + (cursor >= 0 ? cursor : editorLines.length - 1),
+            };
         }
 
-        return { lines, focusLine, marks };
+        return { lines, focusLine, marks, keep };
     }
 
     /**
@@ -723,17 +745,37 @@ interface OptionRegion {
 /**
  * Window over the body. Without an explicit scroll it keeps the focused row visible without
  * following the tail; a wheel scroll pins it wherever the user left it.
+ *
+ * `keep` is the answer editor while it owns the keys: the window is nudged the least it can to
+ * hold that block, and when even the block does not fit, to hold its cursor line. A wheel
+ * scroll is the reader's own position, so it is never pulled back to the editor.
  */
 function bodyWindow(
     length: number,
     focusLine: number,
     height: number,
     scroll: number | undefined,
+    keep: RenderedBody["keep"],
 ): { offset: number; maxOffset: number } {
     const maxOffset = Math.max(0, length - height);
     const wanted = scroll ?? focusLine - Math.floor(height / 2);
+    let offset = Math.min(maxOffset, Math.max(0, wanted));
 
-    return { offset: Math.min(maxOffset, Math.max(0, wanted)), maxOffset };
+    if (keep && scroll === undefined) {
+        if (keep.bottom - keep.top + 1 <= height) {
+            if (keep.top < offset) {
+                offset = keep.top;
+            } else if (keep.bottom >= offset + height) {
+                offset = keep.bottom - height + 1;
+            }
+        } else if (keep.cursor < offset || keep.cursor >= offset + height) {
+            offset = keep.cursor - height + 1;
+        }
+
+        offset = Math.min(maxOffset, Math.max(0, offset));
+    }
+
+    return { offset, maxOffset };
 }
 
 /**
