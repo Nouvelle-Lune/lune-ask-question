@@ -57,7 +57,7 @@
     "typescript": "5.9.3"
   },
   "dependencies": {
-    "@nouvelle-lune/pi-dock-protocol": "file:../lune-dock/packages/pi-dock-protocol"
+    "lune-dock-protocol": "file:../lune-dock-protocol"
   },
-  "bundledDependencies": ["@nouvelle-lune/pi-dock-protocol"]
+  "bundledDependencies": ["lune-dock-protocol"]
 }

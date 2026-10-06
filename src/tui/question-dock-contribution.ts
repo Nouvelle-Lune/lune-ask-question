@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, truncateToWidth, type Component } from "@earendil-works/pi-tui";
-import { createDockContribution, type LuneDockSnapshot } from "@nouvelle-lune/pi-dock-protocol";
+import { createDockContribution, type LuneDockSnapshot } from "lune-dock-protocol";
 import { openPendingQuestions } from "../commands/question.ts";
 import { questionManager } from "../core/questionManager.ts";
 import { questionDock } from "./question-dock.ts";
