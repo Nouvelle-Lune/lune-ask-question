@@ -3,9 +3,9 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 
 import {
     getDockRegistry,
-} from "lune-dock-protocol/host";
+} from "@nouvelle-lune/lune-dock-protocol/host";
 
-import type { LuneDockProvider } from "lune-dock-protocol";
+import type { LuneDockProvider } from "@nouvelle-lune/lune-dock-protocol";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 
 import luneAskQuestion from "../../src/index.ts";

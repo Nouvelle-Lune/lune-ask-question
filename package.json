@@ -57,7 +57,7 @@
     "typescript": "5.9.3"
   },
   "dependencies": {
-    "lune-dock-protocol": "file:../lune-dock-protocol"
+    "@nouvelle-lune/lune-dock-protocol": "file:../lune-dock-protocol"
   },
-  "bundledDependencies": ["lune-dock-protocol"]
+  "bundledDependencies": ["@nouvelle-lune/lune-dock-protocol"]
 }
