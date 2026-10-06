@@ -9,7 +9,7 @@ import {
     renderQuestionAnswerMessage,
     type AskQuestionAnswerMessageDetails,
 } from "./tui/question-answer-message.ts";
-import { questionDock } from "./tui/question-dock.ts";
+import { createQuestionDockContribution } from "./tui/question-dock-contribution.ts";
 import { resetQuestionPanelState } from "./tui/panel/question-panel.ts";
 
 export default function (pi: ExtensionAPI): void {
@@ -32,6 +32,8 @@ export default function (pi: ExtensionAPI): void {
         }
     };
 
+    const dock = createQuestionDockContribution(persist);
+
     let unsubscribeManager: (() => void) | undefined;
     let unsubscribeNotifications: (() => void) | undefined;
 
@@ -51,13 +53,14 @@ export default function (pi: ExtensionAPI): void {
         unsubscribeManager = undefined;
         unsubscribeNotifications?.();
         unsubscribeNotifications = undefined;
+        dock.detach({ retired: true });
 
         // Module state may survive extension reloads, so a session starts from its own
         // branch: clear first, then restore the question state recorded there.
         resetQuestionPanelState();
         questionManager.clearAll();
-        questionDock.setCtx(ctx);
         questionManager.restore(ctx);
+        dock.attach(ctx);
 
         unsubscribeManager = questionManager.subscribe(
             (event) => {
@@ -70,7 +73,7 @@ export default function (pi: ExtensionAPI): void {
                     }
                 } finally {
                     // A snapshot that failed must not also leave the dock showing stale order.
-                    questionDock.render();
+                    dock.refresh();
                 }
             },
             (error) => {
@@ -96,7 +99,6 @@ export default function (pi: ExtensionAPI): void {
             onError: (error) => reportDeliveryFailure(ctx, error),
         });
 
-        questionDock.render();
     });
 
     pi.on("session_shutdown", (_event, ctx) => {
@@ -106,7 +108,7 @@ export default function (pi: ExtensionAPI): void {
         unsubscribeManager = undefined;
         unsubscribeNotifications?.();
         unsubscribeNotifications = undefined;
-        questionDock.clear();
+        dock.detach();
         questionManager.clearAll();
     });
 
@@ -127,7 +129,7 @@ export default function (pi: ExtensionAPI): void {
             onError: (error) => reportDeliveryFailure(ctx, error),
         });
 
-        questionDock.render();
+        dock.refresh();
     });
 
     pi.registerTool(askUserQuestions(persist));

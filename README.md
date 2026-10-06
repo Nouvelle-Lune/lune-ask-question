@@ -75,6 +75,8 @@ Answers land in the transcript and resume the model:
 
 `Esc` is a defer, not a dismissal: the panel closes, the request stays pending, and the dock under the editor says which question `/question` would show next.
 
+With the optional **Lune Dock** host active, this independent row is replaced by a shared one-line dock. Press Down in an empty main editor, select a module with Left/Right, and press Enter to open its panel directly. Closing the panel returns to dock focus. The plugin publishes its own single-line `base`, `detail`, and `full` Components under Lune Protocol v1 Draft 3; `/dock` controls density, visibility and order. Idle state remains available in the shared Dock, and hiding the plugin keeps its snapshots current. Removing the host restores the independent row.
+
 ![The below-editor dock: 1 pending question, the next question and the /question hint](https://raw.githubusercontent.com/Nouvelle-Lune/lune-ask-question/main/docs/question-dock.png)
 
 A question that just arrived surfaces immediately, while one you only deferred waits its turn. A request that arrives while a panel is open does not need `/question`: answering the current one hands the panel over to the next.
@@ -96,3 +98,7 @@ npm run docs:images             # regenerate docs/*.svg + docs/*.png (needs rsvg
 ## License
 
 MIT
+
+Lune Dock can be toggled with `/dock`. Turning it off immediately restores this plugin's
+independent status bar. Its user-level choice is saved in
+`~/.pi/agent/lune-extensions-settings/lune-dock-settings.json` (following `PI_CODING_AGENT_DIR`).

@@ -17,7 +17,7 @@ const SUMMARY_MAX_WIDTH = 40;
 export class QuestionDock {
     private ctx: ExtensionContext | undefined;
 
-    setCtx(ctx: ExtensionContext): void {
+    setCtx(ctx: ExtensionContext | undefined): void {
         this.ctx = ctx;
     }
 

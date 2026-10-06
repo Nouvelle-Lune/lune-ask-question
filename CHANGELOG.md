@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Optional Lune Dock integration.** Pending request counts join the unified status row when its host is active, and Enter opens the same panel as `/question`. The unified item shows the count, name and status dot without a leading module icon. Without the host, the existing question dock remains available.
+
+### Changed
+
+- **BREAKING: Lune Protocol v1 Draft 3 snapshots.** Publish plugin-styled, single-line base/detail/full Components instead of business summary fields. Idle providers stay registered; Dock owns density, visibility and order, while Enter opens the existing plugin UI. Update the host and both plugins together.
+
+- **Simplified Dock integration.** The shared contributor adapter owns registration,
+  session UI cleanup, and host-presence switching. The existing independent status bar is
+  restored immediately when Lune Dock is disabled through `/dock` or is absent.
+
 ## [0.1.0] - 2026-10-03
 
 ### Added
